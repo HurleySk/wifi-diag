@@ -1,8 +1,11 @@
+import pytest
 from wifi_diag.collectors import (
     create_wifi_collector,
     create_latency_collector,
     create_speed_collector,
 )
+from wifi_diag.store import DiagStore
+from wifi_diag.scheduler import DiagScheduler
 
 
 class TestWifiMockCollector:
@@ -43,3 +46,50 @@ class TestSpeedMockCollector:
         assert result["download_mbps"] is not None
         assert result["upload_mbps"] is not None
         assert result["ping_ms"] is not None
+
+
+class TestScheduler:
+    @pytest.fixture
+    def store(self):
+        s = DiagStore(":memory:")
+        yield s
+        s.close()
+
+    def test_collect_once_inserts_wifi(self, store):
+        sched = DiagScheduler(store, dry_run=True)
+        sched.collect_once()
+        readings = store.get_wifi_readings()
+        assert len(readings) == 1
+        assert readings[0]["band"] in ("2.4GHz", "5GHz")
+
+    def test_collect_once_inserts_latency(self, store):
+        sched = DiagScheduler(store, dry_run=True)
+        sched.collect_once()
+        gateway = store.get_latency_readings(target="192.168.1.1")
+        external = store.get_latency_readings(target="8.8.8.8")
+        assert len(gateway) == 1
+        assert len(external) == 1
+
+    def test_collect_once_inserts_speed(self, store):
+        sched = DiagScheduler(store, dry_run=True)
+        sched.collect_once()
+        readings = store.get_speed_readings()
+        assert len(readings) == 1
+        assert readings[0]["download_mbps"] == 95.5
+
+    def test_band_switch_detection(self, store):
+        sched = DiagScheduler(store, dry_run=True)
+        sched.collect_once()
+        sched.collect_once()
+        switches = store.get_band_switches()
+        assert len(switches) == 1
+        bands = {switches[0]["from_band"], switches[0]["to_band"]}
+        assert bands == {"2.4GHz", "5GHz"}
+
+    def test_no_band_switch_on_same_band(self, store):
+        sched = DiagScheduler(store, dry_run=True)
+        sched.collect_once()
+        sched.collect_once()
+        sched.collect_once()
+        switches = store.get_band_switches()
+        assert len(switches) == 2
