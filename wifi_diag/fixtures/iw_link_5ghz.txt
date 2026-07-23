@@ -1,0 +1,11 @@
+Connected to 78:67:0e:6f:a7:fd (on wlan0)
+	SSID: BisNet
+	freq: 5520
+	RX: 12345678 bytes (98765 packets)
+	TX: 23456789 bytes (87654 packets)
+	signal: -42 dBm
+	rx bitrate: 866.7 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 2
+	tx bitrate: 866.7 MBit/s VHT-MCS 9 80MHz short GI VHT-NSS 2
+	bss flags:	short-preamble short-slot-time
+	dtim period:	1
+	beacon int:	100
