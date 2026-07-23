@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from .. import config
 from .trends import weekly_comparison
 from .bands import band_analysis
 
@@ -71,11 +72,15 @@ def diagnose(store, days=7):
                 )
 
     for h in hosts:
-        gw = store.get_latency_readings(host=h, target="192.168.1.1", start=start)
-        ext = store.get_latency_readings(host=h, target="8.8.8.8", start=start)
+        gw = store.get_latency_readings(host=h, target=config.GATEWAY_TARGET, start=start)
+        ext = store.get_latency_readings(host=h, target=config.EXTERNAL_TARGET, start=start)
         if gw and ext:
-            gw_avg = sum(r["rtt_avg_ms"] for r in gw if r["rtt_avg_ms"]) / len(gw)
-            ext_avg = sum(r["rtt_avg_ms"] for r in ext if r["rtt_avg_ms"]) / len(ext)
+            gw_valid = [r["rtt_avg_ms"] for r in gw if r["rtt_avg_ms"]]
+            ext_valid = [r["rtt_avg_ms"] for r in ext if r["rtt_avg_ms"]]
+            if not gw_valid or not ext_valid:
+                continue
+            gw_avg = sum(gw_valid) / len(gw_valid)
+            ext_avg = sum(ext_valid) / len(ext_valid)
             if ext_avg > gw_avg * 5:
                 findings.append(
                     f"⚠ {h}: gateway latency {gw_avg:.0f}ms vs external {ext_avg:.0f}ms — "

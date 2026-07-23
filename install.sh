@@ -14,8 +14,11 @@ pip3 install -e . --break-system-packages 2>/dev/null || pip3 install -e .
 echo "Installing speedtest-cli..."
 pip3 install speedtest-cli --break-system-packages 2>/dev/null || pip3 install speedtest-cli
 
-echo "Creating systemd service..."
-sudo tee /etc/systemd/system/wifi-diag.service > /dev/null << 'UNIT'
+CURRENT_USER="$(whoami)"
+INSTALL_DIR="$(pwd)"
+
+echo "Creating systemd service for user=$CURRENT_USER, dir=$INSTALL_DIR..."
+sudo tee /etc/systemd/system/wifi-diag.service > /dev/null << UNIT
 [Unit]
 Description=WiFi Diagnostic Agent
 After=network-online.target
@@ -23,9 +26,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
+User=$CURRENT_USER
 ExecStart=/usr/bin/python3 -m wifi_diag collect
-WorkingDirectory=/home/pi/wifi-diag
+WorkingDirectory=$INSTALL_DIR
 Restart=on-failure
 RestartSec=10
 
