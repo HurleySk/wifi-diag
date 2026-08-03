@@ -17,5 +17,11 @@ dependencies = [
 [project.scripts]
 wifi-diag = "wifi_diag.cli:main"
 
+# Declared explicitly. Setuptools auto-discovery refuses to guess once the repo
+# root holds more than one candidate directory, and `dispatcher/` (system
+# scripts, not importable code) is exactly such a directory.
+[tool.setuptools.packages.find]
+include = ["wifi_diag*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
