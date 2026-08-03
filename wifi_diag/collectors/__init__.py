@@ -26,3 +26,22 @@ def create_speed_collector(dry_run=False):
         return SpeedMockCollector()
     from .speed import SpeedCollector
     return SpeedCollector()
+
+
+def create_cast_collector(dry_run=False):
+    if dry_run:
+        from .cast_mock import CastMockCollector
+        return CastMockCollector()
+    from .cast import CastCollector
+    return CastCollector()
+
+
+def create_scan_collector(dry_run=False):
+    if dry_run:
+        from .scan_mock import ScanMockCollector
+        return ScanMockCollector()
+    if sys.platform == "win32":
+        from .scan_windows import ScanWindowsCollector
+        return ScanWindowsCollector()
+    from .scan_linux import ScanLinuxCollector
+    return ScanLinuxCollector()

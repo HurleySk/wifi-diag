@@ -93,3 +93,66 @@ class TestScheduler:
         sched.collect_once()
         switches = store.get_band_switches()
         assert len(switches) == 2
+
+
+class TestCastCollector:
+    def test_collect_parses_response(self, monkeypatch):
+        from wifi_diag.collectors.cast import CastCollector
+
+        payload = '{"mac_address":"CC:F4:11:A2:D3:AF","bssid":"78:67:0E:6F:A7:FD","name":"Sam Pod","uptime":10.0}'
+        c = CastCollector()
+        monkeypatch.setattr(c, "_fetch", lambda ip: payload)
+        result = c.collect("192.168.1.157")
+        assert result["mac"] == "cc:f4:11:a2:d3:af"
+        assert result["bssid"] == "78:67:0e:6f:a7:fd"
+
+    def test_collect_propagates_fetch_failure(self, monkeypatch):
+        import pytest
+        from wifi_diag.collectors.cast import CastCollector
+
+        c = CastCollector()
+
+        def boom(ip):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(c, "_fetch", boom)
+        with pytest.raises(OSError):
+            c.collect("192.168.1.157")
+
+
+class TestScanMockCollector:
+    def test_returns_rows(self):
+        from wifi_diag.collectors.scan_mock import ScanMockCollector
+
+        rows = ScanMockCollector().collect()
+        assert len(rows) >= 2
+        assert rows[0]["bssid"] == "78:67:0e:6f:a7:fd"
+        assert rows[0]["band"] == "5GHz"
+
+
+class TestCastMockCollector:
+    def test_cycles_through_fixtures(self):
+        from wifi_diag.collectors.cast_mock import CastMockCollector
+
+        c = CastMockCollector()
+        macs = {c.collect("1.2.3.4")["mac"] for _ in range(3)}
+        assert len(macs) == 3
+
+    def test_ips_lists_mock_devices(self):
+        from wifi_diag.collectors.cast_mock import CastMockCollector
+
+        assert len(CastMockCollector().ips()) == 3
+
+
+class TestScanFactory:
+    def test_dry_run_returns_mock(self):
+        from wifi_diag.collectors import create_scan_collector
+        from wifi_diag.collectors.scan_mock import ScanMockCollector
+
+        assert isinstance(create_scan_collector(dry_run=True), ScanMockCollector)
+
+    def test_dry_run_cast_returns_mock(self):
+        from wifi_diag.collectors import create_cast_collector
+        from wifi_diag.collectors.cast_mock import CastMockCollector
+
+        assert isinstance(create_cast_collector(dry_run=True), CastMockCollector)
