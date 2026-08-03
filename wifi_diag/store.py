@@ -64,9 +64,65 @@ class DiagStore:
             );
             CREATE INDEX IF NOT EXISTS idx_speed_host_ts
                 ON speed_readings(host, timestamp);
+
+            CREATE TABLE IF NOT EXISTS cast_devices (
+                mac TEXT PRIMARY KEY,
+                name TEXT,
+                model TEXT,
+                firmware TEXT,
+                first_seen TEXT,
+                last_seen TEXT,
+                last_ip TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS cast_readings (
+                id INTEGER PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                host TEXT NOT NULL,
+                mac TEXT NOT NULL,
+                ip TEXT,
+                name TEXT,
+                ssid TEXT,
+                bssid TEXT,
+                band TEXT,
+                channel INTEGER,
+                frequency_mhz INTEGER,
+                reachable INTEGER NOT NULL,
+                ethernet INTEGER,
+                uptime_secs REAL,
+                rtt_avg_ms REAL,
+                packet_loss_pct REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_cast_mac_ts
+                ON cast_readings(mac, timestamp);
+
+            CREATE TABLE IF NOT EXISTS cast_events (
+                id INTEGER PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                host TEXT NOT NULL,
+                mac TEXT NOT NULL,
+                name TEXT,
+                event_type TEXT NOT NULL,
+                detail TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_cast_event_mac_ts
+                ON cast_events(mac, timestamp);
+
+            CREATE TABLE IF NOT EXISTS ap_scans (
+                id INTEGER PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                host TEXT NOT NULL,
+                bssid TEXT NOT NULL,
+                ssid TEXT,
+                frequency_mhz INTEGER,
+                channel INTEGER,
+                band TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_ap_scan_bssid_ts
+                ON ap_scans(bssid, timestamp);
         """)
 
-    def _query(self, table, host=None, target=None, start=None, end=None):
+    def _query(self, table, host=None, target=None, mac=None, start=None, end=None):
         query = f"SELECT * FROM {table} WHERE 1=1"
         params = []
         if host:
@@ -75,6 +131,9 @@ class DiagStore:
         if target:
             query += " AND target = ?"
             params.append(target)
+        if mac:
+            query += " AND mac = ?"
+            params.append(mac)
         if start:
             query += " AND timestamp >= ?"
             params.append(start)
@@ -164,6 +223,106 @@ class DiagStore:
             "SELECT DISTINCT host FROM wifi_readings ORDER BY host"
         ).fetchall()
         return [r[0] for r in rows]
+
+    def upsert_cast_device(self, device):
+        self.conn.execute(
+            """INSERT INTO cast_devices
+               (mac, name, model, firmware, first_seen, last_seen, last_ip)
+               VALUES (:mac, :name, :model, :firmware, :timestamp, :timestamp, :last_ip)
+               ON CONFLICT(mac) DO UPDATE SET
+                 name = COALESCE(excluded.name, cast_devices.name),
+                 model = COALESCE(excluded.model, cast_devices.model),
+                 firmware = COALESCE(excluded.firmware, cast_devices.firmware),
+                 last_seen = excluded.last_seen,
+                 last_ip = COALESCE(excluded.last_ip, cast_devices.last_ip)""",
+            device,
+        )
+        self.conn.commit()
+
+    def insert_cast_reading(self, reading):
+        self.conn.execute(
+            """INSERT INTO cast_readings
+               (timestamp, host, mac, ip, name, ssid, bssid, band, channel,
+                frequency_mhz, reachable, ethernet, uptime_secs, rtt_avg_ms,
+                packet_loss_pct)
+               VALUES (:timestamp, :host, :mac, :ip, :name, :ssid, :bssid,
+                :band, :channel, :frequency_mhz, :reachable, :ethernet,
+                :uptime_secs, :rtt_avg_ms, :packet_loss_pct)""",
+            reading,
+        )
+        self.conn.commit()
+
+    def insert_cast_event(self, event):
+        self.conn.execute(
+            """INSERT INTO cast_events
+               (timestamp, host, mac, name, event_type, detail)
+               VALUES (:timestamp, :host, :mac, :name, :event_type, :detail)""",
+            event,
+        )
+        self.conn.commit()
+
+    def insert_ap_scans(self, rows):
+        self.conn.executemany(
+            """INSERT INTO ap_scans
+               (timestamp, host, bssid, ssid, frequency_mhz, channel, band)
+               VALUES (:timestamp, :host, :bssid, :ssid, :frequency_mhz,
+                :channel, :band)""",
+            rows,
+        )
+        self.conn.commit()
+
+    def get_cast_devices(self):
+        rows = self.conn.execute(
+            "SELECT * FROM cast_devices ORDER BY name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_cast_readings(self, mac=None, host=None, start=None, end=None):
+        return self._query("cast_readings", host=host, mac=mac, start=start, end=end)
+
+    def get_cast_events(self, mac=None, host=None, start=None, end=None):
+        return self._query("cast_events", host=host, mac=mac, start=start, end=end)
+
+    def get_ap_scans(self, bssid=None, start=None, end=None):
+        query = "SELECT * FROM ap_scans WHERE 1=1"
+        params = []
+        if bssid:
+            query += " AND bssid = ?"
+            params.append(bssid)
+        if start:
+            query += " AND timestamp >= ?"
+            params.append(start)
+        if end:
+            query += " AND timestamp <= ?"
+            params.append(end)
+        query += " ORDER BY timestamp"
+        return [dict(r) for r in self.conn.execute(query, params).fetchall()]
+
+    def get_latest_cast_reading(self, mac):
+        row = self.conn.execute(
+            "SELECT * FROM cast_readings WHERE mac = ? ORDER BY timestamp DESC LIMIT 1",
+            (mac,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_bssid_band_map(self):
+        """Latest observed frequency/channel/band per BSSID."""
+        rows = self.conn.execute(
+            """SELECT s.bssid, s.frequency_mhz, s.channel, s.band
+               FROM ap_scans s
+               JOIN (SELECT bssid, MAX(timestamp) AS ts
+                     FROM ap_scans GROUP BY bssid) latest
+                 ON s.bssid = latest.bssid AND s.timestamp = latest.ts
+               GROUP BY s.bssid"""
+        ).fetchall()
+        return {
+            r["bssid"]: {
+                "frequency_mhz": r["frequency_mhz"],
+                "channel": r["channel"],
+                "band": r["band"],
+            }
+            for r in rows
+        }
 
     def close(self):
         self.conn.close()
