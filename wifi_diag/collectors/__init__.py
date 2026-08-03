@@ -12,20 +12,20 @@ def create_wifi_collector(dry_run=False):
     return WifiLinuxCollector()
 
 
-def create_latency_collector(target, count=5, dry_run=False):
+def create_latency_collector(target, count=5, dry_run=False, interface=None):
     if dry_run:
         from .latency_mock import LatencyMockCollector
         return LatencyMockCollector(target)
     from .latency import LatencyCollector
-    return LatencyCollector(target, count)
+    return LatencyCollector(target, count, interface)
 
 
-def create_speed_collector(dry_run=False):
+def create_speed_collector(dry_run=False, interface=None):
     if dry_run:
         from .speed_mock import SpeedMockCollector
         return SpeedMockCollector()
     from .speed import SpeedCollector
-    return SpeedCollector()
+    return SpeedCollector(interface)
 
 
 def create_cast_collector(dry_run=False):

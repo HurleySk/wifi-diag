@@ -185,6 +185,45 @@ been seen in a scan shows a band of `?` rather than a guess.
   mDNS discovery does not cross subnets. If discovery fails, set
   `CAST_STATIC_IPS` in `wifi_diag/config.py`.
 
+## Dual-homed hosts
+
+If the monitoring host has more than one route to the internet - a Pi plugged
+into ethernet while also associated on WiFi is the common case - the kernel
+sends every probe out whichever interface has the lower route metric. That is
+almost always the wire. Left alone, latency and speed readings describe the
+cable, not the WiFi link, and nothing in the numbers reveals it.
+
+The agent pins its probes to the interface named by `WIFI_INTERFACE` in
+`wifi_diag/config.py`:
+
+- **Latency** uses `ping -I <device>`, which sets `SO_BINDTODEVICE` and forces
+  egress. This works with no additional setup.
+- **Speed** can only pass a source address to `speedtest-cli`, and a source
+  address does not choose a route. So the collector brackets each run with
+  per-interface byte counters and **discards the reading** if the traffic left
+  over a different interface. A missing reading is recoverable; a wrong one
+  that reads as a healthy WiFi link is not.
+
+To make speed readings work on such a host, `install.sh` adds a NetworkManager
+dispatcher script that keeps a policy rule routing traffic sourced from the
+WiFi address out the WiFi interface. Nothing else sources traffic from that
+address, so nothing else on the system is affected.
+
+To verify, compare the two paths by hand:
+
+```bash
+ping -I wlan0 -c 5 8.8.8.8      # over WiFi
+ping -c 5 8.8.8.8               # over whatever the routing table prefers
+```
+
+Different round-trip times mean the host is dual-homed and the pinning matters.
+To remove the dispatcher later:
+
+```bash
+sudo rm /etc/NetworkManager/dispatcher.d/90-wifi-diag-srcroute
+while sudo ip rule del table 200 2>/dev/null; do :; done
+```
+
 ## Managing the Service (Pi)
 
 ```bash

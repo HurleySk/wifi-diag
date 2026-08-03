@@ -1,0 +1,45 @@
+#!/bin/sh
+# Installed by wifi-diag into /etc/NetworkManager/dispatcher.d/.
+#
+# On a host with more than one route to the internet - a Pi wired to eth0 while
+# also associated on wlan0 - the kernel sends everything out the lower-metric
+# interface, normally the wire. wifi-diag pins its probes to the WiFi
+# interface, but for the speed test that means binding a source address, and a
+# source address alone does not choose a route.
+#
+# This adds a policy rule so traffic sourced from the WiFi address egresses
+# over the WiFi interface. Nothing else on the system sources traffic from that
+# address, so nothing else is affected.
+#
+# To remove: delete this file, then `ip rule del table 200` until it errors.
+
+IFACE="$1"
+ACTION="$2"
+WIFI_IF="__WIFI_IF__"
+TABLE=200
+
+[ "$IFACE" = "$WIFI_IF" ] || exit 0
+
+clear_rules() {
+    while ip rule del table "$TABLE" 2>/dev/null; do :; done
+}
+
+case "$ACTION" in
+    up|dhcp4-change)
+        addr=$(ip -4 -o addr show dev "$WIFI_IF" 2>/dev/null \
+               | awk '{print $4}' | cut -d/ -f1 | head -1)
+        gw=$(ip -4 route show default dev "$WIFI_IF" 2>/dev/null \
+             | awk '{print $3}' | head -1)
+        [ -n "$addr" ] && [ -n "$gw" ] || exit 0
+        # Rebuild rather than append: the lease may have handed us a new address.
+        clear_rules
+        ip route replace default via "$gw" dev "$WIFI_IF" table "$TABLE"
+        ip rule add from "$addr" table "$TABLE"
+        ;;
+    down)
+        clear_rules
+        ip route flush table "$TABLE" 2>/dev/null || true
+        ;;
+esac
+
+exit 0

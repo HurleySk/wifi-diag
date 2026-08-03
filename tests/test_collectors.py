@@ -144,6 +144,150 @@ class TestCastMockCollector:
         assert len(CastMockCollector().ips()) == 3
 
 
+class TestLatencyInterfaceBinding:
+    """A dual-homed host routes probes out the preferred interface unless the
+    probe is explicitly bound, which silently measures the wrong link."""
+
+    def test_binds_by_device_name_not_address(self, monkeypatch):
+        import sys as _sys
+        from wifi_diag.collectors.latency import LatencyCollector
+
+        monkeypatch.setattr(_sys, "platform", "linux")
+        cmd = LatencyCollector("8.8.8.8", 3, "wlan0")._command()
+        assert "-I" in cmd
+        # The device name, not the interface address: only SO_BINDTODEVICE
+        # forces egress, source-address binding still routes by metric.
+        assert cmd[cmd.index("-I") + 1] == "wlan0"
+
+    def test_unbound_when_no_interface_given(self, monkeypatch):
+        import sys as _sys
+        from wifi_diag.collectors.latency import LatencyCollector
+
+        monkeypatch.setattr(_sys, "platform", "linux")
+        assert "-I" not in LatencyCollector("8.8.8.8", 3)._command()
+
+    def test_windows_is_left_unbound(self, monkeypatch):
+        import sys as _sys
+        from wifi_diag.collectors.latency import LatencyCollector
+
+        monkeypatch.setattr(_sys, "platform", "win32")
+        cmd = LatencyCollector("8.8.8.8", 3, "wlan0")._command()
+        assert "-I" not in cmd
+        assert cmd[0] == "ping"
+
+
+class TestSpeedInterfaceVerification:
+    def _patch(self, monkeypatch, before, after, ip="192.168.1.196"):
+        import subprocess
+        from wifi_diag.collectors import speed
+
+        class Result:
+            stdout = "Ping: 20.0 ms\nDownload: 53.5 Mbit/s\nUpload: 55.6 Mbit/s\n"
+
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            return Result()
+
+        snapshots = iter([before, after])
+        monkeypatch.setattr(subprocess, "run", run)
+        monkeypatch.setattr(speed, "interface_ip", lambda i: ip)
+        monkeypatch.setattr(speed, "rx_byte_counters", lambda: next(snapshots))
+        return calls
+
+    def test_passes_source_address_when_resolvable(self, monkeypatch):
+        from wifi_diag.collectors.speed import SpeedCollector
+
+        calls = self._patch(
+            monkeypatch, {"wlan0": 0, "eth0": 0}, {"wlan0": 90_000_000, "eth0": 100}
+        )
+        SpeedCollector("wlan0").collect()
+        assert "--source" in calls[0]
+        assert calls[0][calls[0].index("--source") + 1] == "192.168.1.196"
+
+    def test_accepts_reading_carried_by_the_named_interface(self, monkeypatch):
+        from wifi_diag.collectors.speed import SpeedCollector
+
+        self._patch(
+            monkeypatch, {"wlan0": 0, "eth0": 0}, {"wlan0": 90_000_000, "eth0": 100}
+        )
+        assert SpeedCollector("wlan0").collect()["download_mbps"] == 53.5
+
+    def test_rejects_reading_that_escaped_over_another_interface(self, monkeypatch):
+        from wifi_diag.collectors.speed import SpeedCollector, WrongInterfaceError
+
+        # This is the real-world failure: eth0 has the lower route metric, so
+        # the test ran over the wire and reported a speed the WiFi link cannot
+        # reach. Storing it would look like a healthy result.
+        self._patch(
+            monkeypatch, {"wlan0": 0, "eth0": 0}, {"wlan0": 4_000, "eth0": 500_000_000}
+        )
+        with pytest.raises(WrongInterfaceError):
+            SpeedCollector("wlan0").collect()
+
+    def test_keeps_reading_when_counters_are_unavailable(self, monkeypatch):
+        from wifi_diag.collectors.speed import SpeedCollector
+
+        # No /sys/class/net (Windows, containers). Unverifiable is not the same
+        # as wrong, so the reading stands.
+        self._patch(monkeypatch, {}, {})
+        assert SpeedCollector("wlan0").collect()["upload_mbps"] == 55.6
+
+    def test_unbound_collector_skips_verification(self, monkeypatch):
+        import subprocess
+        from wifi_diag.collectors import speed
+        from wifi_diag.collectors.speed import SpeedCollector
+
+        class Result:
+            stdout = "Download: 400.0 Mbit/s\n"
+
+        calls = []
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **k: (calls.append(cmd), Result())[1])
+        monkeypatch.setattr(speed, "rx_byte_counters", lambda: pytest.fail("should not snapshot"))
+        assert SpeedCollector().collect()["download_mbps"] == 400.0
+        assert "--source" not in calls[0]
+
+
+class TestBusiestInterface:
+    def test_names_the_interface_that_moved_the_most(self):
+        from wifi_diag.netiface import busiest_interface
+
+        assert busiest_interface(
+            {"wlan0": 0, "eth0": 0}, {"wlan0": 10, "eth0": 900}
+        ) == "eth0"
+
+    def test_ignores_loopback(self):
+        from wifi_diag.netiface import busiest_interface
+
+        assert busiest_interface(
+            {"lo": 0, "wlan0": 0}, {"lo": 10_000, "wlan0": 5}
+        ) == "wlan0"
+
+    def test_returns_none_when_nothing_moved(self):
+        from wifi_diag.netiface import busiest_interface
+
+        assert busiest_interface({"wlan0": 7}, {"wlan0": 7}) is None
+
+    def test_ignores_interfaces_that_vanished_between_snapshots(self):
+        from wifi_diag.netiface import busiest_interface
+
+        assert busiest_interface(
+            {"wlan0": 0, "usb0": 0}, {"wlan0": 500}
+        ) == "wlan0"
+
+
+class TestSchedulerInterfaceWiring:
+    def test_probes_are_bound_to_the_configured_wifi_interface(self):
+        from wifi_diag import config
+        from wifi_diag.collectors import create_latency_collector, create_speed_collector
+
+        latency = create_latency_collector("8.8.8.8", 3, False, config.WIFI_INTERFACE)
+        speed = create_speed_collector(False, config.WIFI_INTERFACE)
+        assert latency.interface == config.WIFI_INTERFACE
+        assert speed.interface == config.WIFI_INTERFACE
+
+
 class TestScanFactory:
     def test_dry_run_returns_mock(self):
         from wifi_diag.collectors import create_scan_collector

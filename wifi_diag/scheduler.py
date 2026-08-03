@@ -23,14 +23,20 @@ class DiagScheduler:
         self._last_band = {}
         self._last_freq = {}
 
+        # Every probe is pinned to the WiFi interface. On a host with a second
+        # route to the internet the routing table would otherwise prefer it -
+        # usually the wired one - and the readings would describe that link
+        # instead, with nothing in the numbers to give it away.
+        self._interface = config.WIFI_INTERFACE
+
         self.wifi_collector = create_wifi_collector(dry_run)
         self.gateway_collector = create_latency_collector(
-            config.GATEWAY_TARGET, config.PING_COUNT, dry_run
+            config.GATEWAY_TARGET, config.PING_COUNT, dry_run, self._interface
         )
         self.external_collector = create_latency_collector(
-            config.EXTERNAL_TARGET, config.PING_COUNT, dry_run
+            config.EXTERNAL_TARGET, config.PING_COUNT, dry_run, self._interface
         )
-        self.speed_collector = create_speed_collector(dry_run)
+        self.speed_collector = create_speed_collector(dry_run, self._interface)
         self.cast_collector = create_cast_collector(dry_run)
         self.scan_collector = create_scan_collector(dry_run)
         # Seed from stored scans so a failed first scan does not force every
@@ -239,7 +245,9 @@ class DiagScheduler:
 
         latency = {}
         try:
-            collector = create_latency_collector(ip, config.CAST_PING_COUNT, self.dry_run)
+            collector = create_latency_collector(
+                ip, config.CAST_PING_COUNT, self.dry_run, self._interface
+            )
             latency = collector.collect()
         except Exception:
             latency = {}

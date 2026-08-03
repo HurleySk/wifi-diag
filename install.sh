@@ -39,6 +39,29 @@ elif [ -z "$WIFI_DIAG_BIN" ]; then
     echo "Warning: wifi-diag console script not found; use 'python3 -m wifi_diag' instead."
 fi
 
+# A host with a second route to the internet sends every probe out whichever
+# interface has the lower route metric, normally the wired one. Latency probes
+# are pinned with `ping -I <device>`, which forces egress on its own, but the
+# speed test can only bind a source address, and that does not choose a route.
+# Without the policy rule below, the speed collector detects the mismatch and
+# discards the reading rather than storing a number that describes the wire.
+WIFI_IF="${WIFI_DIAG_INTERFACE:-wlan0}"
+DISPATCH_DIR=/etc/NetworkManager/dispatcher.d
+
+if [ -d "$DISPATCH_DIR" ] && [ -f "$INSTALL_DIR/dispatcher/90-wifi-diag-srcroute" ]; then
+    echo "Installing source-routing dispatcher for $WIFI_IF..."
+    sed "s/__WIFI_IF__/$WIFI_IF/" "$INSTALL_DIR/dispatcher/90-wifi-diag-srcroute" \
+        | sudo tee "$DISPATCH_DIR/90-wifi-diag-srcroute" > /dev/null
+    sudo chmod 755 "$DISPATCH_DIR/90-wifi-diag-srcroute"
+    sudo chown root:root "$DISPATCH_DIR/90-wifi-diag-srcroute"
+    # Apply now; the dispatcher itself only fires on the next interface event.
+    sudo "$DISPATCH_DIR/90-wifi-diag-srcroute" "$WIFI_IF" up || true
+else
+    echo "NetworkManager dispatcher not found; skipping source-routing setup."
+    echo "  If this host has both wired and WiFi routes, speed readings will be"
+    echo "  discarded rather than attributed to the wrong interface."
+fi
+
 echo "Creating systemd service for user=$CURRENT_USER, dir=$INSTALL_DIR..."
 sudo tee /etc/systemd/system/wifi-diag.service > /dev/null << UNIT
 [Unit]
