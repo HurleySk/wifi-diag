@@ -102,3 +102,72 @@ class TestDiagnose:
     def test_empty_store(self, store):
         result = diagnose(store, days=7)
         assert "No data" in result or "no data" in result.lower()
+
+
+class TestDeviceSummary:
+    def _store_with_data(self):
+        from wifi_diag.store import DiagStore
+
+        s = DiagStore(":memory:")
+        for i, (band, reachable) in enumerate([
+            ("5GHz", 1), ("5GHz", 1), ("2.4GHz", 1), (None, 0),
+        ]):
+            s.insert_cast_reading({
+                "timestamp": f"2026-08-0{i + 1}T10:00:00+00:00",
+                "host": "testpi", "mac": "cc:f4:11:a2:d3:af", "ip": "192.168.1.157",
+                "name": "Sam's Pod", "ssid": "BisNet", "bssid": "78:67:0e:6f:a7:fd",
+                "band": band, "channel": 104, "frequency_mhz": 5520,
+                "reachable": reachable, "ethernet": 0, "uptime_secs": 100.0,
+                "rtt_avg_ms": 4.0, "packet_loss_pct": 0.0,
+            })
+        for etype in ["band_switch", "offline", "reboot", "bssid_switch"]:
+            s.insert_cast_event({
+                "timestamp": "2026-08-02T10:00:00+00:00", "host": "testpi",
+                "mac": "cc:f4:11:a2:d3:af", "name": "Sam's Pod",
+                "event_type": etype, "detail": "{}",
+            })
+        return s
+
+    def test_summary_counts(self):
+        from wifi_diag.analysis.devices import device_summary
+
+        s = self._store_with_data()
+        result = device_summary(s, days=3650)
+        d = result["devices"]["cc:f4:11:a2:d3:af"]
+        assert d["name"] == "Sam's Pod"
+        assert d["total"] == 4
+        assert d["reachable_pct"] == 75.0
+        assert d["band_counts"]["5GHz"] == 2
+        assert d["band_counts"]["2.4GHz"] == 1
+        assert d["dominant_band"] == "5GHz"
+        assert d["band_switches"] == 1
+        assert d["bssid_switches"] == 1
+        assert d["dropouts"] == 1
+        assert d["reboots"] == 1
+        assert d["avg_rtt_ms"] == 4.0
+        s.close()
+
+    def test_empty_store_returns_no_devices(self):
+        from wifi_diag.analysis.devices import device_summary
+        from wifi_diag.store import DiagStore
+
+        s = DiagStore(":memory:")
+        assert device_summary(s, days=7)["devices"] == {}
+        s.close()
+
+    def test_device_with_no_known_band_has_none_dominant(self):
+        from wifi_diag.analysis.devices import device_summary
+        from wifi_diag.store import DiagStore
+
+        s = DiagStore(":memory:")
+        s.insert_cast_reading({
+            "timestamp": "2026-08-01T10:00:00+00:00", "host": "testpi",
+            "mac": "ac:67:84:89:93:63", "ip": "192.168.1.152", "name": "Display",
+            "ssid": "BisNet", "bssid": None, "band": None, "channel": None,
+            "frequency_mhz": None, "reachable": 1, "ethernet": 0,
+            "uptime_secs": 10.0, "rtt_avg_ms": None, "packet_loss_pct": None,
+        })
+        d = device_summary(s, days=3650)["devices"]["ac:67:84:89:93:63"]
+        assert d["dominant_band"] is None
+        assert d["avg_rtt_ms"] is None
+        s.close()
