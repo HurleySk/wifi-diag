@@ -16,10 +16,23 @@ class ScanLinuxCollector(BaseCollector):
         return self._try_iw()
 
     def _try_nmcli(self):
+        # A forced rescan matters: NetworkManager's cached list can contain
+        # only the currently associated BSSID, which would leave the other
+        # radio permanently unmapped and every device on it band-unknown.
+        # Requesting a scan needs authorization, so fall back to the cache
+        # when it is refused.
+        rows = self._nmcli(rescan=True)
+        if rows:
+            return rows
+        return self._nmcli(rescan=False)
+
+    def _nmcli(self, rescan):
+        cmd = ["nmcli", "-t", "-f", "BSSID,SSID,FREQ,CHAN", "dev", "wifi", "list"]
+        if rescan:
+            cmd += ["--rescan", "yes"]
         try:
             result = subprocess.run(
-                ["nmcli", "-t", "-f", "BSSID,SSID,FREQ,CHAN", "dev", "wifi", "list"],
-                capture_output=True, text=True, timeout=30,
+                cmd, capture_output=True, text=True, timeout=60,
             )
         except (OSError, subprocess.SubprocessError):
             return []

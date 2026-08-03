@@ -156,3 +156,56 @@ class TestScanFactory:
         from wifi_diag.collectors.cast_mock import CastMockCollector
 
         assert isinstance(create_cast_collector(dry_run=True), CastMockCollector)
+
+
+class TestScanLinuxCollector:
+    def _fake_run(self, calls, results):
+        import subprocess
+
+        class Result:
+            def __init__(self, rc, out):
+                self.returncode = rc
+                self.stdout = out
+
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            return Result(*results[len(calls) - 1])
+
+        return run
+
+    def test_forces_a_rescan_first(self, monkeypatch):
+        import subprocess
+        from wifi_diag.collectors.scan_linux import ScanLinuxCollector
+
+        calls = []
+        out = "78\\:67\\:0E\\:6F\\:A7\\:FC:BisNet:2462 MHz:11\n"
+        monkeypatch.setattr(subprocess, "run", self._fake_run(calls, [(0, out)]))
+        rows = ScanLinuxCollector().collect()
+        assert calls[0][-2:] == ["--rescan", "yes"]
+        assert rows[0]["band"] == "2.4GHz"
+
+    def test_falls_back_to_cache_when_rescan_refused(self, monkeypatch):
+        import subprocess
+        from wifi_diag.collectors.scan_linux import ScanLinuxCollector
+
+        calls = []
+        out = "78\\:67\\:0E\\:6F\\:A7\\:FD:BisNet:5240 MHz:48\n"
+        # First call (rescan) is refused, second (cached) succeeds.
+        monkeypatch.setattr(subprocess, "run", self._fake_run(calls, [(4, ""), (0, out)]))
+        rows = ScanLinuxCollector().collect()
+        assert len(calls) == 2
+        assert "--rescan" not in calls[1]
+        assert rows[0]["channel"] == 48
+
+    def test_falls_back_to_iw_when_nmcli_unavailable(self, monkeypatch):
+        import subprocess
+        from wifi_diag.collectors.scan_linux import ScanLinuxCollector
+
+        calls = []
+        iw_out = "BSS 78:67:0e:6f:a7:fd(on wlan0)\n\tfreq: 5240\n\tSSID: BisNet\n"
+        monkeypatch.setattr(
+            subprocess, "run", self._fake_run(calls, [(4, ""), (4, ""), (0, iw_out)])
+        )
+        rows = ScanLinuxCollector().collect()
+        assert calls[2][0] == "iw"
+        assert rows[0]["bssid"] == "78:67:0e:6f:a7:fd"
