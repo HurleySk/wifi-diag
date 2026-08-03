@@ -71,7 +71,7 @@ class TestCli:
         t.start()
         time.sleep(0.5)
         import signal, os
-        # Just verify it started without error — thread is daemon so it dies with test
+        # Just verify it started without error - thread is daemon so it dies with test
 
 
 class TestDeviceCommands:

@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "wifi-diag"
 version = "0.1.0"
 description = "WiFi diagnostic agent for Raspberry Pi and Windows"
+license = { file = "LICENSE" }
+authors = [{ name = "Samuel Hurley" }]
 requires-python = ">=3.9"
 dependencies = [
     "speedtest-cli>=2.1.3",

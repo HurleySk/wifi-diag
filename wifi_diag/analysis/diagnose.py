@@ -43,12 +43,12 @@ def diagnose(store, days=7):
     for h, d in ba["hosts"].items():
         if d["5ghz_pct"] < 50:
             findings.append(
-                f"⚠ {h} is spending only {d['5ghz_pct']:.0f}% of time on 5GHz — "
+                f"⚠ {h} is spending only {d['5ghz_pct']:.0f}% of time on 5GHz - "
                 f"band steering may be pushing it to 2.4GHz."
             )
         if d["switch_count"] > 10:
             findings.append(
-                f"⚠ {h} had {d['switch_count']} band switches — "
+                f"⚠ {h} had {d['switch_count']} band switches - "
                 f"frequent switching suggests signal instability."
             )
 
@@ -84,12 +84,12 @@ def diagnose(store, days=7):
             ext_avg = sum(ext_valid) / len(ext_valid)
             if ext_avg > gw_avg * 5:
                 findings.append(
-                    f"⚠ {h}: gateway latency {gw_avg:.0f}ms vs external {ext_avg:.0f}ms — "
+                    f"⚠ {h}: gateway latency {gw_avg:.0f}ms vs external {ext_avg:.0f}ms - "
                     f"bottleneck is likely upstream (5G backhaul), not local WiFi."
                 )
             elif gw_avg > 20:
                 findings.append(
-                    f"⚠ {h}: gateway latency {gw_avg:.0f}ms is high — "
+                    f"⚠ {h}: gateway latency {gw_avg:.0f}ms is high - "
                     f"local WiFi congestion or interference likely."
                 )
 
@@ -97,7 +97,7 @@ def diagnose(store, days=7):
         if gw_loss:
             pct = len(gw_loss) / len(gw) * 100
             findings.append(
-                f"⚠ {h}: packet loss to gateway in {pct:.0f}% of probes — "
+                f"⚠ {h}: packet loss to gateway in {pct:.0f}% of probes - "
                 f"indicates WiFi instability."
             )
 
