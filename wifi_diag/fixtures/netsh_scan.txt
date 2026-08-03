@@ -1,0 +1,24 @@
+Interface name : Wi-Fi
+There are 2 networks currently visible.
+
+SSID 1 : BisNet
+    Network type            : Infrastructure
+    Authentication          : WPA2-Personal
+    Encryption              : CCMP
+    BSSID 1                 : 78:67:0e:6f:a7:fd
+         Signal             : 80%
+         Radio type         : 802.11ax
+         Channel            : 104
+    BSSID 2                 : 78:67:0e:6f:a7:fc
+         Signal             : 74%
+         Radio type         : 802.11n
+         Channel            : 6
+
+SSID 2 : NeighborNet
+    Network type            : Infrastructure
+    Authentication          : WPA2-Personal
+    Encryption              : CCMP
+    BSSID 1                 : aa:bb:cc:11:22:33
+         Signal             : 30%
+         Radio type         : 802.11n
+         Channel            : 1

@@ -230,3 +230,74 @@ class TestEurekaParser:
 
         with pytest.raises(ValueError):
             parse_eureka_info("<html>not json</html>")
+
+
+class TestScanParser:
+    def test_parse_nmcli(self):
+        from wifi_diag.parsers.scan_parser import parse_nmcli_scan
+
+        rows = parse_nmcli_scan((FIXTURES / "nmcli_scan.txt").read_text())
+        assert len(rows) == 3
+        first = rows[0]
+        assert first["bssid"] == "78:67:0e:6f:a7:fd"
+        assert first["ssid"] == "BisNet"
+        assert first["frequency_mhz"] == 5520
+        assert first["channel"] == 104
+        assert first["band"] == "5GHz"
+        assert rows[1]["bssid"] == "78:67:0e:6f:a7:fc"
+        assert rows[1]["band"] == "2.4GHz"
+        assert rows[1]["channel"] == 6
+
+    def test_nmcli_unescapes_bssid_colons(self):
+        from wifi_diag.parsers.scan_parser import parse_nmcli_scan
+
+        rows = parse_nmcli_scan("AA\:BB\:CC\:DD\:EE\:FF:MyNet:5180 MHz:36")
+        assert rows[0]["bssid"] == "aa:bb:cc:dd:ee:ff"
+        assert rows[0]["ssid"] == "MyNet"
+
+    def test_nmcli_skips_blank_and_malformed_lines(self):
+        from wifi_diag.parsers.scan_parser import parse_nmcli_scan
+
+        rows = parse_nmcli_scan("\n\ngarbage\nAA\:BB\:CC\:DD\:EE\:FF:MyNet:5180 MHz:36\n")
+        assert len(rows) == 1
+
+    def test_parse_iw_scan(self):
+        from wifi_diag.parsers.scan_parser import parse_iw_scan
+
+        rows = parse_iw_scan((FIXTURES / "iw_scan.txt").read_text())
+        assert len(rows) == 3
+        assert rows[0]["bssid"] == "78:67:0e:6f:a7:fd"
+        assert rows[0]["frequency_mhz"] == 5520
+        assert rows[0]["channel"] == 104
+        assert rows[0]["band"] == "5GHz"
+        assert rows[0]["ssid"] == "BisNet"
+        assert rows[1]["bssid"] == "78:67:0e:6f:a7:fc"
+        assert rows[1]["band"] == "2.4GHz"
+        assert rows[2]["ssid"] == "NeighborNet"
+
+    def test_parse_netsh_scan(self):
+        from wifi_diag.parsers.scan_parser import parse_netsh_scan
+
+        rows = parse_netsh_scan((FIXTURES / "netsh_scan.txt").read_text())
+        assert len(rows) == 3
+        assert rows[0]["bssid"] == "78:67:0e:6f:a7:fd"
+        assert rows[0]["ssid"] == "BisNet"
+        assert rows[0]["channel"] == 104
+        assert rows[0]["band"] == "5GHz"
+        assert rows[0]["frequency_mhz"] == 5520
+        assert rows[1]["bssid"] == "78:67:0e:6f:a7:fc"
+        assert rows[1]["ssid"] == "BisNet"
+        assert rows[1]["band"] == "2.4GHz"
+        assert rows[1]["frequency_mhz"] == 2437
+        assert rows[2]["ssid"] == "NeighborNet"
+
+    def test_empty_input_returns_empty_list(self):
+        from wifi_diag.parsers.scan_parser import (
+            parse_iw_scan,
+            parse_netsh_scan,
+            parse_nmcli_scan,
+        )
+
+        assert parse_nmcli_scan("") == []
+        assert parse_iw_scan("") == []
+        assert parse_netsh_scan("") == []

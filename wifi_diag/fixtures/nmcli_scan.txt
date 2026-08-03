@@ -1,0 +1,3 @@
+78\:67\:0E\:6F\:A7\:FD:BisNet:5520 MHz:104
+78\:67\:0E\:6F\:A7\:FC:BisNet:2437 MHz:6
+AA\:BB\:CC\:11\:22\:33:NeighborNet:2412 MHz:1

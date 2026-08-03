@@ -1,0 +1,17 @@
+BSS 78:67:0e:6f:a7:fd(on wlan0) -- associated
+	TSF: 1234567890 usec
+	freq: 5520
+	beacon interval: 100 TUs
+	signal: -42.00 dBm
+	SSID: BisNet
+	DS Parameter set: channel 104
+BSS 78:67:0e:6f:a7:fc(on wlan0)
+	TSF: 987654321 usec
+	freq: 2437
+	beacon interval: 100 TUs
+	signal: -55.00 dBm
+	SSID: BisNet
+BSS aa:bb:cc:11:22:33(on wlan0)
+	freq: 2412
+	signal: -78.00 dBm
+	SSID: NeighborNet
