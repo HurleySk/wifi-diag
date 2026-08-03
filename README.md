@@ -122,7 +122,7 @@ DIAGNOSIS SUMMARY (last 7 days)
 Signal: RASPBERRYPI avg -42dBm (good), raspberrypi avg -68dBm (fair)
 Band:   RASPBERRYPI 95% on 5GHz, raspberrypi 40% on 5GHz
 
-⚠ raspberrypi is spending only 40% of time on 5GHz — band steering may be pushing it to 2.4GHz.
+⚠ raspberrypi is spending only 40% of time on 5GHz - band steering may be pushing it to 2.4GHz.
 ⚠ 5GHz usage declining: 70% → 40% over 4 weeks.
 ```
 
