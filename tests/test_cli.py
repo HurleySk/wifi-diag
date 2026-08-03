@@ -72,3 +72,82 @@ class TestCli:
         time.sleep(0.5)
         import signal, os
         # Just verify it started without error — thread is daemon so it dies with test
+
+
+class TestDeviceCommands:
+    def _seed(self, db_path):
+        from wifi_diag.store import DiagStore
+
+        s = DiagStore(str(db_path))
+        s.insert_cast_reading({
+            "timestamp": "2026-08-01T10:00:00+00:00", "host": "testpi",
+            "mac": "cc:f4:11:a2:d3:af", "ip": "192.168.1.157", "name": "Kitchen Pod",
+            "ssid": "BisNet", "bssid": "78:67:0e:6f:a7:fd", "band": "5GHz",
+            "channel": 104, "frequency_mhz": 5520, "reachable": 1, "ethernet": 0,
+            "uptime_secs": 100.0, "rtt_avg_ms": 4.0, "packet_loss_pct": 0.0,
+        })
+        s.upsert_cast_device({
+            "mac": "cc:f4:11:a2:d3:af", "name": "Kitchen Pod", "model": "Nest Hub",
+            "firmware": "1.68", "last_ip": "192.168.1.157",
+            "timestamp": "2026-08-01T10:00:00+00:00",
+        })
+        s.insert_cast_event({
+            "timestamp": "2026-08-01T11:00:00+00:00", "host": "testpi",
+            "mac": "cc:f4:11:a2:d3:af", "name": "Kitchen Pod",
+            "event_type": "band_switch", "detail": '{"from": "5GHz", "to": "2.4GHz"}',
+        })
+        s.close()
+
+    def test_devices_lists_device(self, tmp_path, capsys):
+        from wifi_diag.cli import main
+
+        db = tmp_path / "t.db"
+        self._seed(db)
+        main(["devices", "--db", str(db)])
+        assert "Kitchen Pod" in capsys.readouterr().out
+
+    def test_devices_empty_message(self, tmp_path, capsys):
+        from wifi_diag.cli import main
+
+        main(["devices", "--db", str(tmp_path / "empty.db")])
+        assert "No Cast devices" in capsys.readouterr().out
+
+    def test_device_by_name_case_insensitive(self, tmp_path, capsys):
+        from wifi_diag.cli import main
+
+        db = tmp_path / "t.db"
+        self._seed(db)
+        main(["device", "kitchen pod", "--db", str(db)])
+        out = capsys.readouterr().out
+        assert "Kitchen Pod" in out
+        assert "band_switch" in out
+
+    def test_device_by_mac(self, tmp_path, capsys):
+        from wifi_diag.cli import main
+
+        db = tmp_path / "t.db"
+        self._seed(db)
+        main(["device", "cc:f4:11:a2:d3:af", "--db", str(db)])
+        assert "Kitchen Pod" in capsys.readouterr().out
+
+    def test_device_not_found(self, tmp_path, capsys):
+        from wifi_diag.cli import main
+
+        db = tmp_path / "t.db"
+        self._seed(db)
+        main(["device", "Nonexistent", "--db", str(db)])
+        assert "No device matching" in capsys.readouterr().out
+
+    def test_events_lists_events(self, tmp_path, capsys):
+        from wifi_diag.cli import main
+
+        db = tmp_path / "t.db"
+        self._seed(db)
+        main(["events", "--hours", "999999", "--db", str(db)])
+        assert "band_switch" in capsys.readouterr().out
+
+    def test_events_empty_message(self, tmp_path, capsys):
+        from wifi_diag.cli import main
+
+        main(["events", "--db", str(tmp_path / "empty.db")])
+        assert "No device events" in capsys.readouterr().out

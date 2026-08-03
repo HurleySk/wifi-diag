@@ -7,6 +7,7 @@ from .scheduler import DiagScheduler
 from .analysis.trends import weekly_comparison
 from .analysis.bands import band_analysis
 from .analysis.diagnose import diagnose
+from .analysis.devices import device_summary
 
 
 def main(argv=None):
@@ -47,6 +48,15 @@ def main(argv=None):
     diag_p = sub.add_parser("diagnose", help="Automated root cause analysis", parents=[db_parent])
     diag_p.add_argument("--days", type=int, default=7)
 
+    sub.add_parser("devices", help="Google Cast device status", parents=[db_parent])
+
+    device_p = sub.add_parser("device", help="History for one Cast device", parents=[db_parent])
+    device_p.add_argument("name", help="Device name (case-insensitive) or MAC")
+    device_p.add_argument("--days", type=int, default=7)
+
+    events_p = sub.add_parser("events", help="Recent Cast device events", parents=[db_parent])
+    events_p.add_argument("--hours", type=int, default=24)
+
     args = parser.parse_args(argv)
     db_path = args.db or config.DB_PATH
     store = DiagStore(db_path)
@@ -64,6 +74,12 @@ def main(argv=None):
             _cmd_bands(store, args.days)
         elif args.command == "diagnose":
             _cmd_diagnose(store, args.days)
+        elif args.command == "devices":
+            _cmd_devices(store)
+        elif args.command == "device":
+            _cmd_device(store, args.name, args.days)
+        elif args.command == "events":
+            _cmd_events(store, args.hours)
     finally:
         store.close()
 
@@ -163,3 +179,99 @@ def _cmd_bands(store, days):
 
 def _cmd_diagnose(store, days):
     print(diagnose(store, days=days))
+
+
+def _cmd_devices(store):
+    summary = device_summary(store, days=7)["devices"]
+    if not summary:
+        print("No Cast devices seen yet. Run 'wifi-diag collect' first.")
+        return
+
+    print(f"{'DEVICE':<24} {'IP':<16} {'BAND':<8} {'UP%':>6} {'SWITCHES':>9} {'DROPS':>6}")
+    print("─" * 74)
+    for mac, d in sorted(summary.items(), key=lambda kv: (kv[1]["name"] or kv[0])):
+        print(
+            f"{(d['name'] or mac):<24} {(d['last_ip'] or '?'):<16} "
+            f"{(d['dominant_band'] or '?'):<8} {d['reachable_pct']:>5.0f}% "
+            f"{d['band_switches']:>9} {d['dropouts']:>6}"
+        )
+
+
+def _resolve_device(store, needle):
+    needle = needle.strip().lower()
+    devices = store.get_cast_devices()
+    exact = [d for d in devices if d["mac"] == needle]
+    if exact:
+        return exact[0]
+    matches = [d for d in devices if (d["name"] or "").lower() == needle]
+    if not matches:
+        matches = [d for d in devices if needle in (d["name"] or "").lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        print(f"'{needle}' matches multiple devices:")
+        for d in matches:
+            print(f"  {d['name']} ({d['mac']})")
+        return None
+    print(f"No device matching '{needle}'.")
+    return None
+
+
+def _cmd_device(store, name, days):
+    from datetime import datetime, timedelta, timezone
+
+    device = _resolve_device(store, name)
+    if not device:
+        return
+
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    readings = store.get_cast_readings(mac=device["mac"], start=start)
+    events = store.get_cast_events(mac=device["mac"], start=start)
+
+    print(f"\n── {device['name'] or device['mac']} ({device['mac']}) ──")
+    print(f"  Model:    {device['model'] or 'unknown'}")
+    print(f"  Firmware: {device['firmware'] or 'unknown'}")
+    print(f"  Last IP:  {device['last_ip'] or 'unknown'}")
+
+    if not readings:
+        print(f"  No readings in the last {days} days.")
+        return
+
+    reachable = sum(1 for r in readings if r["reachable"])
+    print(f"  Readings: {len(readings)} over {days} days")
+    print(f"  Reachable: {reachable / len(readings) * 100:.0f}%")
+
+    bands = {}
+    for r in readings:
+        if r["band"]:
+            bands[r["band"]] = bands.get(r["band"], 0) + 1
+    if bands:
+        parts = [f"{b} {c / len(readings) * 100:.0f}%" for b, c in sorted(bands.items())]
+        print(f"  Band:     {', '.join(parts)}")
+    else:
+        print("  Band:     unknown (device does not report a BSSID)")
+
+    if events:
+        print(f"\n  Events ({len(events)}):")
+        for e in events[-20:]:
+            print(f"    {e['timestamp']}  {e['event_type']:<14} {e['detail']}")
+    else:
+        print("\n  No events recorded.")
+
+
+def _cmd_events(store, hours):
+    from datetime import datetime, timedelta, timezone
+
+    start = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    events = store.get_cast_events(start=start)
+    if not events:
+        print(f"No device events in the last {hours} hours.")
+        return
+
+    print(f"{'TIME':<28} {'DEVICE':<22} {'EVENT':<14} DETAIL")
+    print("─" * 90)
+    for e in events:
+        print(
+            f"{e['timestamp']:<28} {(e['name'] or e['mac']):<22} "
+            f"{e['event_type']:<14} {e['detail']}"
+        )
