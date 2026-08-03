@@ -169,3 +169,64 @@ class TestSpeedtestParser:
         assert result["download_mbps"] is None
         assert result["upload_mbps"] is None
         assert result["ping_ms"] is None
+
+
+class TestEurekaParser:
+    def test_parse_newer_firmware(self):
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        result = parse_eureka_info((FIXTURES / "eureka_pod.json").read_text(encoding="utf-8"))
+        assert result["mac"] == "cc:f4:11:a2:d3:af"
+        assert result["name"] == "Sam's Pod"
+        assert result["ip"] == "192.168.1.157"
+        assert result["ssid"] == "BisNet"
+        assert result["bssid"] == "78:67:0e:6f:a7:fd"
+        assert result["ethernet"] is False
+        assert result["uptime_secs"] == 30988.337637
+        assert result["firmware"] == "1.68.cast_20251119_1643_RC14.834495410"
+
+    def test_parse_older_firmware(self):
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        result = parse_eureka_info((FIXTURES / "eureka_speaker.json").read_text(encoding="utf-8"))
+        assert result["mac"] == "d8:8c:79:21:66:8a"
+        assert result["bssid"] == "78:67:0e:6f:a7:fc"
+        assert result["firmware"] == "3.78.540761"
+
+    def test_empty_bssid_becomes_none(self):
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        result = parse_eureka_info((FIXTURES / "eureka_empty_bssid.json").read_text(encoding="utf-8"))
+        assert result["bssid"] is None
+        assert result["mac"] == "ac:67:84:89:93:63"
+
+    def test_bssid_is_lowercased(self):
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        result = parse_eureka_info('{"mac_address":"AA:BB:CC:DD:EE:FF","bssid":"11:22:33:AA:BB:CC"}')
+        assert result["bssid"] == "11:22:33:aa:bb:cc"
+        assert result["mac"] == "aa:bb:cc:dd:ee:ff"
+
+    def test_missing_optional_fields_are_none(self):
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        result = parse_eureka_info('{"mac_address":"AA:BB:CC:DD:EE:FF"}')
+        assert result["name"] is None
+        assert result["ssid"] is None
+        assert result["bssid"] is None
+        assert result["uptime_secs"] is None
+        assert result["ethernet"] is None
+
+    def test_rejects_non_cast_json(self):
+        import pytest
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        with pytest.raises(ValueError):
+            parse_eureka_info('{"hello":"world"}')
+
+    def test_rejects_invalid_json(self):
+        import pytest
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        with pytest.raises(ValueError):
+            parse_eureka_info("<html>not json</html>")
