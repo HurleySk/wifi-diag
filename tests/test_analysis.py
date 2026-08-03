@@ -171,3 +171,65 @@ class TestDeviceSummary:
         assert d["dominant_band"] is None
         assert d["avg_rtt_ms"] is None
         s.close()
+
+
+class TestDiagnoseCastSection:
+    def _store_with_flapping_device(self):
+        from wifi_diag.store import DiagStore
+
+        s = DiagStore(":memory:")
+        s.insert_wifi_reading({
+            "timestamp": "2026-08-01T10:00:00+00:00", "host": "testpi",
+            "rssi_dbm": -50, "noise_dbm": None, "frequency_mhz": 5520,
+            "band": "5GHz", "channel": 104, "link_speed_mbps": 800.0,
+            "bssid": "78:67:0e:6f:a7:fd",
+        })
+        for i in range(10):
+            s.insert_cast_reading({
+                "timestamp": f"2026-08-01T10:{i:02d}:00+00:00", "host": "testpi",
+                "mac": "cc:f4:11:a2:d3:af", "ip": "192.168.1.157",
+                "name": "Kitchen Pod", "ssid": "BisNet",
+                "bssid": "78:67:0e:6f:a7:fd", "band": "5GHz", "channel": 104,
+                "frequency_mhz": 5520, "reachable": 0 if i < 4 else 1,
+                "ethernet": 0, "uptime_secs": 100.0, "rtt_avg_ms": 4.0,
+                "packet_loss_pct": 0.0,
+            })
+        for i in range(6):
+            s.insert_cast_event({
+                "timestamp": f"2026-08-01T10:{i:02d}:00+00:00", "host": "testpi",
+                "mac": "cc:f4:11:a2:d3:af", "name": "Kitchen Pod",
+                "event_type": "band_switch", "detail": "{}",
+            })
+        return s
+
+    def test_diagnose_reports_unreachable_device(self):
+        from wifi_diag.analysis.diagnose import diagnose
+
+        s = self._store_with_flapping_device()
+        out = diagnose(s, days=3650)
+        assert "Kitchen Pod" in out
+        assert "60%" in out
+        s.close()
+
+    def test_diagnose_flags_frequent_band_switching(self):
+        from wifi_diag.analysis.diagnose import diagnose
+
+        s = self._store_with_flapping_device()
+        out = diagnose(s, days=3650)
+        assert "band switches" in out
+        s.close()
+
+    def test_diagnose_without_cast_data_is_unchanged(self):
+        from wifi_diag.analysis.diagnose import diagnose
+        from wifi_diag.store import DiagStore
+
+        s = DiagStore(":memory:")
+        s.insert_wifi_reading({
+            "timestamp": "2026-08-01T10:00:00+00:00", "host": "testpi",
+            "rssi_dbm": -50, "noise_dbm": None, "frequency_mhz": 5520,
+            "band": "5GHz", "channel": 104, "link_speed_mbps": 800.0,
+            "bssid": "78:67:0e:6f:a7:fd",
+        })
+        out = diagnose(s, days=3650)
+        assert "Cast devices" not in out
+        s.close()

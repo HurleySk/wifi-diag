@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from .. import config
 from .trends import weekly_comparison
 from .bands import band_analysis
+from .devices import device_summary
 
 
 def diagnose(store, days=7):
@@ -99,6 +100,40 @@ def diagnose(store, days=7):
                 f"⚠ {h}: packet loss to gateway in {pct:.0f}% of probes — "
                 f"indicates WiFi instability."
             )
+
+    cast = device_summary(store, days=days)["devices"]
+    if cast:
+        lines.append("")
+        lines.append(f"Cast devices ({len(cast)}):")
+        for mac, d in sorted(cast.items(), key=lambda kv: (kv[1]["name"] or kv[0])):
+            band = d["dominant_band"] or "band unknown"
+            lines.append(
+                f"  {d['name'] or mac}: {d['reachable_pct']:.0f}% reachable, "
+                f"{band}, {d['band_switches']} band switches, {d['reboots']} reboots"
+            )
+
+        for mac, d in cast.items():
+            label = d["name"] or mac
+            if d["reachable_pct"] < 95:
+                findings.append(
+                    f"⚠ {label} was unreachable in {100 - d['reachable_pct']:.0f}% of "
+                    f"polls - it is dropping off the network, not just responding slowly."
+                )
+            if d["band_switches"] > 5:
+                findings.append(
+                    f"⚠ {label} had {d['band_switches']} band switches - "
+                    f"band steering is moving it between radios repeatedly."
+                )
+            if d["reboots"] > 2:
+                findings.append(
+                    f"⚠ {label} restarted {d['reboots']} times - "
+                    f"a device-side fault, not a network one."
+                )
+            if d["dominant_band"] is None and d["total"] > 0:
+                findings.append(
+                    f"ℹ {label} does not report a BSSID, so its band cannot be "
+                    f"determined. Reachability data is still valid."
+                )
 
     if findings:
         for f in findings:
