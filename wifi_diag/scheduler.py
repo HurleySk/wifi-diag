@@ -33,7 +33,12 @@ class DiagScheduler:
         self.speed_collector = create_speed_collector(dry_run)
         self.cast_collector = create_cast_collector(dry_run)
         self.scan_collector = create_scan_collector(dry_run)
-        self._band_map = {}
+        # Seed from stored scans so a failed first scan does not force every
+        # reading to band NULL for the life of the process.
+        try:
+            self._band_map = store.get_bssid_band_map()
+        except Exception:
+            self._band_map = {}
         # mac -> {"ip": str, "name": str, "model": str}
         self._targets = {}
         # mac -> last reading dict, for event detection
@@ -141,6 +146,8 @@ class DiagScheduler:
             print(f"  Scan error: {e}")
             return
         if not rows:
+            print("  Scan returned no networks; keeping the existing band map.")
+            self._band_map = self._band_map or self.store.get_bssid_band_map()
             return
         ts = self._now_iso()
         for r in rows:
@@ -183,16 +190,28 @@ class DiagScheduler:
         unidentified_ips, models = self._refresh_targets()
         ts = self._now_iso()
 
-        probes = [(mac, t.get("ip"), t.get("name"), t.get("model"))
-                  for mac, t in self._targets.items()]
-        probes += [(None, ip, None, models.get(ip)) for ip in unidentified_ips]
+        # One reading per device per cycle, no matter how many addresses we
+        # probe it at.
+        seen = set()
 
-        for known_mac, ip, known_name, model in probes:
+        # Probe discovered and static addresses first: they carry current DHCP
+        # truth. Resolving them before the registry stops a device that changed
+        # lease from being probed twice - once at its stale address, producing a
+        # fabricated dropout, and once at its real one.
+        for ip in unidentified_ips:
+            self._probe_cast_device(None, ip, None, models.get(ip), ts, seen)
+
+        for mac, target in list(self._targets.items()):
+            if mac in seen:
+                continue
+            ip = target.get("ip")
             if not ip:
                 continue
-            self._probe_cast_device(known_mac, ip, known_name, model, ts)
+            self._probe_cast_device(
+                mac, ip, target.get("name"), target.get("model"), ts, seen
+            )
 
-    def _probe_cast_device(self, known_mac, ip, known_name, model, ts):
+    def _probe_cast_device(self, known_mac, ip, known_name, model, ts, seen):
         info = None
         try:
             info = self.cast_collector.collect(ip)
@@ -202,12 +221,20 @@ class DiagScheduler:
         if info is not None:
             mac = info["mac"]
             name = info.get("name") or known_name
+            if known_mac and known_mac != mac:
+                # This address now belongs to a different device. Drop the stale
+                # mapping, otherwise the old MAC keeps probing an address it no
+                # longer owns and both devices report bogus state forever.
+                self._targets.pop(known_mac, None)
         elif known_mac:
             mac = known_mac
             name = known_name
         else:
             # Never seen this device successfully; nothing to attribute the
             # reading to, so drop it rather than inventing an identity.
+            return
+
+        if mac in seen:
             return
 
         latency = {}
@@ -252,9 +279,11 @@ class DiagScheduler:
             print(f"  Cast store error for {name or mac}: {e}")
             return
 
+        seen.add(mac)
         self._targets[mac] = {"ip": ip, "name": name, "model": model}
 
-        for event in detect_cast_events(self._last_cast.get(mac), reading):
+        prev = self._last_cast.get(mac)
+        for event in detect_cast_events(prev, reading):
             try:
                 self.store.insert_cast_event({
                     "timestamp": ts,
@@ -266,7 +295,16 @@ class DiagScheduler:
                 })
             except Exception as e:
                 print(f"  Cast event store error: {e}")
-        self._last_cast[mac] = reading
+
+        # Carry the last known uptime forward across an unreachable sample. A
+        # rebooting device usually misses a poll, so comparing against the
+        # immediately preceding reading (uptime NULL) would hide every reboot
+        # behind the dropout that accompanies it.
+        remembered = reading
+        if reading["uptime_secs"] is None and prev is not None:
+            remembered = dict(reading)
+            remembered["uptime_secs"] = prev.get("uptime_secs")
+        self._last_cast[mac] = remembered
 
     def _handle_stop(self, signum, frame):
         self.stop()

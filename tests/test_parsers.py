@@ -251,14 +251,14 @@ class TestScanParser:
     def test_nmcli_unescapes_bssid_colons(self):
         from wifi_diag.parsers.scan_parser import parse_nmcli_scan
 
-        rows = parse_nmcli_scan("AA\:BB\:CC\:DD\:EE\:FF:MyNet:5180 MHz:36")
+        rows = parse_nmcli_scan("AA\\:BB\\:CC\\:DD\\:EE\\:FF:MyNet:5180 MHz:36")
         assert rows[0]["bssid"] == "aa:bb:cc:dd:ee:ff"
         assert rows[0]["ssid"] == "MyNet"
 
     def test_nmcli_skips_blank_and_malformed_lines(self):
         from wifi_diag.parsers.scan_parser import parse_nmcli_scan
 
-        rows = parse_nmcli_scan("\n\ngarbage\nAA\:BB\:CC\:DD\:EE\:FF:MyNet:5180 MHz:36\n")
+        rows = parse_nmcli_scan("\n\ngarbage\nAA\\:BB\\:CC\\:DD\\:EE\\:FF:MyNet:5180 MHz:36\n")
         assert len(rows) == 1
 
     def test_parse_iw_scan(self):
@@ -301,3 +301,11 @@ class TestScanParser:
         assert parse_nmcli_scan("") == []
         assert parse_iw_scan("") == []
         assert parse_netsh_scan("") == []
+
+
+class TestUnknownBandIsNull:
+    def test_unclassifiable_frequency_stored_as_none(self):
+        from wifi_diag.parsers.scan_parser import parse_nmcli_scan
+
+        rows = parse_nmcli_scan("AA\\:BB\\:CC\\:DD\\:EE\\:FF:Odd:4920 MHz:0")
+        assert rows[0]["band"] is None

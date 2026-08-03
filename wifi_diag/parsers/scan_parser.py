@@ -12,7 +12,10 @@ def _row(bssid, ssid, frequency_mhz, channel, band):
         "ssid": ssid,
         "frequency_mhz": frequency_mhz,
         "channel": channel,
-        "band": band,
+        # An unclassifiable frequency is stored as NULL, not as the string
+        # "unknown": a non-null band is treated as known everywhere downstream
+        # and would otherwise produce band_switch events against "unknown".
+        "band": None if band == "unknown" else band,
     }
 
 

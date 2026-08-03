@@ -12,10 +12,18 @@ class CastCollector(BaseCollector):
         self.port = port or config.CAST_HTTP_PORT
         self.timeout = timeout or config.CAST_HTTP_TIMEOUT_SECS
 
+    # An eureka_info payload is well under 2 KB. Cap the read so a hostile or
+    # malfunctioning responder on port 8008 cannot stream indefinitely: the
+    # socket timeout applies per read, not to the total transfer.
+    MAX_RESPONSE_BYTES = 65536
+
     def _fetch(self, ip):
         url = f"http://{ip}:{self.port}/setup/eureka_info?options=detail"
-        with urllib.request.urlopen(url, timeout=self.timeout) as resp:
-            return resp.read().decode("utf-8", errors="replace")
+        # These are LAN addresses; the default opener would route them through
+        # any http_proxy set in the environment.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=self.timeout) as resp:
+            return resp.read(self.MAX_RESPONSE_BYTES).decode("utf-8", errors="replace")
 
     def collect(self, ip=None) -> dict:
         if ip is None:
