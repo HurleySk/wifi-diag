@@ -65,7 +65,10 @@ UNIT
 echo "Enabling and starting service..."
 sudo systemctl daemon-reload
 sudo systemctl enable wifi-diag
-sudo systemctl start wifi-diag
+# restart, not start: on a re-install the service is usually already running,
+# and 'start' is a no-op that would leave the old process alive with the old
+# unit's environment and the old code.
+sudo systemctl restart wifi-diag
 
 echo ""
 echo "=== Done! ==="
