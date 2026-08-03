@@ -49,6 +49,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$CURRENT_USER
+# systemd gives units a minimal PATH that excludes ~/.local/bin, where pip
+# user-installs console scripts. Without this, speedtest-cli is not found and
+# speed collection silently fails for the life of the service.
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin"
 ExecStart=/usr/bin/python3 -m wifi_diag collect
 WorkingDirectory=$INSTALL_DIR
 Restart=on-failure
