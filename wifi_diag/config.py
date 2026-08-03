@@ -13,3 +13,13 @@ DB_DIR = Path.home() / ".wifi-diag"
 DB_PATH = DB_DIR / "data.db"
 
 HOSTNAME = socket.gethostname()
+
+# Google Cast device monitoring
+CAST_INTERVAL_SECS = 60
+SCAN_INTERVAL_SECS = 900
+CAST_HTTP_PORT = 8008
+CAST_HTTP_TIMEOUT_SECS = 3
+CAST_PING_COUNT = 3
+CAST_STATIC_IPS = []
+DISCOVERY_TIMEOUT_SECS = 5
+WIFI_INTERFACE = "wlan0"

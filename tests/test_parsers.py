@@ -40,6 +40,22 @@ class TestFreqUtils:
             freq = channel_to_freq(ch, "5GHz")
             assert freq_to_channel(freq) == ch
 
+    def test_freq_to_band_6ghz(self):
+        assert freq_to_band(5955) == "6GHz"
+        assert freq_to_band(6175) == "6GHz"
+        assert freq_to_band(7115) == "6GHz"
+
+    def test_freq_to_band_5ghz_upper_edge(self):
+        assert freq_to_band(5825) == "5GHz"
+        assert freq_to_band(5895) == "5GHz"
+
+    def test_freq_to_band_above_6ghz_is_unknown(self):
+        assert freq_to_band(7300) == "unknown"
+
+    def test_freq_to_channel_6ghz(self):
+        assert freq_to_channel(5955) == 1
+        assert freq_to_channel(6175) == 45
+
 
 from pathlib import Path
 
