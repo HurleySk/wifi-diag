@@ -74,7 +74,7 @@ cd wifi-diag
 
    This will:
    - Install Python dependencies
-   - Install `speedtest-cli`
+   - Install Ookla's speedtest CLI, falling back to `speedtest-cli`
    - Create a systemd service that starts on boot
    - Enable and start the service
 
@@ -211,23 +211,39 @@ variable and writes it into the systemd unit.
   figure describing neither link.
 
   Either way the collector brackets each run with per-interface byte counters
-  and **discards the reading** unless at least 90% of the bytes moved over the
-  named interface. A missing reading is recoverable; a wrong one that reads as
-  a healthy WiFi link is not. Discards are logged with the share that did go
-  the right way.
+  and **discards the reading** unless the named interface carried at least 70%
+  of the bytes the speed test itself reports downloading. A missing reading is
+  recoverable; a wrong one that reads as a healthy WiFi link is not. Discards
+  are logged with the fraction that did go the right way.
+
+  The comparison is deliberately against the test's own byte total rather than
+  against traffic on the other interfaces. Background chatter is roughly a
+  fixed number of bytes per run, so sharing a denominator with it made the
+  check tighten as the link slowed and threw away every reading below about
+  15 Mbit/s: the tool went blind during exactly the degradation it exists to
+  record. This is also why the fallback runs `speedtest-cli --json` rather
+  than `--simple`, which reports no byte total at all.
 - **Cast reachability** binds its HTTP probe to the WiFi address, so a device
   that is unreachable over WiFi is not recorded as up because the wire
   answered for it.
 
-Latency and speed rows record the interface they were measured on. Rows written
-before this existed have `interface` NULL, meaning unknown provenance, and
-`diagnose` refuses to compare a window of one interface against another rather
-than reporting the difference as a change in the network.
+Latency and speed rows record the interface they were **verified** to have been
+measured on, which is not the same as the one the agent asked for. A Windows
+ping has no device-binding flag, and a host with no `/sys/class/net` has no
+byte counters to check against; both store `interface` NULL, as do rows written
+before the column existed. NULL means unknown provenance, and `diagnose`
+refuses to compare a window of one interface against another rather than
+reporting the difference as a change in the network.
 
 To make speed readings work on such a host, `install.sh` adds a NetworkManager
 dispatcher script that keeps a policy rule routing traffic sourced from the
 WiFi address out the WiFi interface. Nothing else sources traffic from that
 address, so nothing else on the system is affected.
+
+One caveat if you use policy routing yourself: on every WiFi event the script
+rebuilds table 200 from scratch, which means flushing its routes and deleting
+every rule that points at it, whoever added them. Move your own rules to a
+different table before installing.
 
 To verify, compare the two paths by hand:
 

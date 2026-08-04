@@ -59,33 +59,27 @@ def rx_byte_counters():
     return counters
 
 
-def interface_share(before, after, iface):
-    """Fraction of the bytes moved between snapshots that iface carried.
+def interface_delta(before, after, iface):
+    """Bytes iface received between two snapshots, or None if uncomparable.
 
-    Returns None when the snapshots cannot be compared or nothing moved.
-    speedtest-cli opens parallel connections and binds only some of them to
-    the source address, so a run can straddle two links; a share well under 1
-    means the reading describes neither link on its own.
+    Deliberately local to iface: a caller comparing this against the byte
+    total the speed test itself reports needs nothing from the other
+    interfaces, so an unrelated NIC appearing or vanishing mid-measurement
+    cannot invalidate the answer. Returns None when iface is missing from
+    either snapshot or its counter went backwards, which callers read as
+    "cannot attribute this reading" rather than as zero.
     """
-    if before.keys() != after.keys() or iface not in before:
+    if iface not in before or iface not in after:
         return None
-    total = 0
-    carried = 0
-    for name in before:
-        delta = after[name] - before[name]
-        if delta < 0:
-            return None
-        total += delta
-        if name == iface:
-            carried = delta
-    if total <= 0:
-        return None
-    return carried / total
+    delta = after[iface] - before[iface]
+    return None if delta < 0 else delta
 
 
 def busiest_interface(before, after):
     """Name the interface that received the most bytes between two snapshots.
 
+    Expects snapshots from rx_byte_counters, which has already dropped
+    loopback and virtual devices; this function does no filtering of its own.
     Returns None when a counter went backwards, when an interface appeared or
     vanished mid-measurement, or when nothing moved. Callers read None as
     "cannot tell", which beats naming a winner from an incomplete comparison.

@@ -132,7 +132,8 @@ class DiagScheduler:
                 reading = collector.collect()
                 reading["timestamp"] = self._now_iso()
                 reading["host"] = config.HOSTNAME
-                reading["interface"] = self._interface
+                # The collector reports what it bound; NULL where it could not.
+                reading.setdefault("interface", None)
                 self.store.insert_latency_reading(reading)
             except Exception as e:
                 print(f"  Latency collection error: {e}")
@@ -152,7 +153,8 @@ class DiagScheduler:
         try:
             reading["timestamp"] = self._now_iso()
             reading["host"] = config.HOSTNAME
-            reading["interface"] = self._interface
+            # Set only where the byte counters confirmed it, so NULL is honest.
+            reading.setdefault("interface", None)
             self.store.insert_speed_reading(reading)
         except Exception as e:
             print(f"  Speed store error: {e}")

@@ -175,15 +175,23 @@ class TestLatencyInterfaceBinding:
         assert cmd[0] == "ping"
 
 
+LEGACY_JSON = (
+    '{"download": 53500000.0, "upload": 55600000.0, "ping": 20.0, '
+    '"bytes_sent": 41700000, "bytes_received": 90000000}'
+)
+
+
 class TestSpeedInterfaceVerification:
-    def _patch(self, monkeypatch, before, after, ip="192.168.1.196"):
+    def _patch(self, monkeypatch, before, after, ip="192.168.1.196", stdout=LEGACY_JSON):
         import subprocess
         from wifi_diag.collectors import speed
 
         class Result:
-            stdout = "Ping: 20.0 ms\nDownload: 53.5 Mbit/s\nUpload: 55.6 Mbit/s\n"
-            stderr = ""
             returncode = 0
+            stderr = ""
+
+            def __init__(self):
+                self.stdout = stdout
 
         calls = []
 
@@ -193,7 +201,7 @@ class TestSpeedInterfaceVerification:
 
         snapshots = iter([before, after])
         monkeypatch.setattr(subprocess, "run", run)
-        monkeypatch.setattr(speed, "ookla_available", lambda: False)
+        monkeypatch.setattr(speed, "ookla_binary", lambda: None)
         monkeypatch.setattr(speed, "interface_ip", lambda i: ip)
         monkeypatch.setattr(speed, "rx_byte_counters", lambda: next(snapshots))
         return calls
@@ -207,6 +215,16 @@ class TestSpeedInterfaceVerification:
         SpeedCollector("wlan0").collect()
         assert "--source" in calls[0]
         assert calls[0][calls[0].index("--source") + 1] == "192.168.1.196"
+
+    def test_asks_for_json_because_simple_omits_the_byte_total(self, monkeypatch):
+        from wifi_diag.collectors.speed import SpeedCollector
+
+        calls = self._patch(
+            monkeypatch, {"wlan0": 0, "eth0": 0}, {"wlan0": 90_000_000, "eth0": 100}
+        )
+        SpeedCollector("wlan0").collect()
+        assert "--json" in calls[0]
+        assert "--simple" not in calls[0]
 
     def test_accepts_reading_carried_by_the_named_interface(self, monkeypatch):
         from wifi_diag.collectors.speed import SpeedCollector
@@ -231,7 +249,17 @@ class TestSpeedInterfaceVerification:
 
         # No /sys/class/net: unverifiable is not wrong, so the reading stands.
         self._patch(monkeypatch, {}, {})
-        assert SpeedCollector("wlan0").collect()["upload_mbps"] == 55.6
+        reading = SpeedCollector("wlan0").collect()
+        assert reading["upload_mbps"] == 55.6
+        assert reading["interface"] is None
+
+    def test_a_verified_reading_names_the_interface_it_was_measured_on(self, monkeypatch):
+        from wifi_diag.collectors.speed import SpeedCollector
+
+        self._patch(
+            monkeypatch, {"wlan0": 0, "eth0": 0}, {"wlan0": 90_000_000, "eth0": 100}
+        )
+        assert SpeedCollector("wlan0").collect()["interface"] == "wlan0"
 
     def test_unbound_collector_skips_verification(self, monkeypatch):
         import subprocess
@@ -239,13 +267,13 @@ class TestSpeedInterfaceVerification:
         from wifi_diag.collectors.speed import SpeedCollector
 
         class Result:
-            stdout = "Download: 400.0 Mbit/s\n"
+            stdout = '{"download": 400000000.0}'
             stderr = ""
             returncode = 0
 
         calls = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **k: (calls.append(cmd), Result())[1])
-        monkeypatch.setattr(speed, "ookla_available", lambda: False)
+        monkeypatch.setattr(speed, "ookla_binary", lambda: None)
         monkeypatch.setattr(speed, "rx_byte_counters", lambda: pytest.fail("should not snapshot"))
         assert SpeedCollector().collect()["download_mbps"] == 400.0
         assert "--source" not in calls[0]

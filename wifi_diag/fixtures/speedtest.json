@@ -1,0 +1,1 @@
+{"download": 95670000.0, "upload": 45230000.0, "ping": 12.345, "server": {"id": "1234", "name": "Portland, OR", "country": "United States", "sponsor": "Example ISP", "latency": 12.345}, "timestamp": "2026-08-04T14:12:50.123456Z", "bytes_sent": 56537088, "bytes_received": 119586816, "share": null, "client": {"ip": "203.0.113.7", "isp": "Example ISP"}}

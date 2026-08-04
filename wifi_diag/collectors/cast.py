@@ -1,3 +1,4 @@
+import errno
 import http.client
 import urllib.request
 
@@ -5,6 +6,20 @@ from .base import BaseCollector
 from .. import config
 from ..netiface import interface_ip
 from ..parsers.eureka_parser import parse_eureka_info
+
+
+_UNRESOLVED = object()
+
+
+def _is_unbindable(err):
+    """True when the local bind failed rather than the device being unreachable.
+
+    urllib wraps the socket error in a URLError, which subclasses OSError but
+    assigns args directly and so carries no errno of its own; the code stays
+    on the wrapped reason.
+    """
+    reason = getattr(err, "reason", err)
+    return getattr(reason, "errno", None) == errno.EADDRNOTAVAIL
 
 
 class _SourceBoundHTTPHandler(urllib.request.HTTPHandler):
@@ -27,14 +42,15 @@ class CastCollector(BaseCollector):
         self.port = port or config.CAST_HTTP_PORT
         self.timeout = timeout or config.CAST_HTTP_TIMEOUT_SECS
         self.interface = interface
-        self._source = None
+        self._source = _UNRESOLVED
 
     # Payloads are under 2 KB; the socket timeout is per read, not per transfer.
     MAX_RESPONSE_BYTES = 65536
 
     def _source_address(self):
-        if self._source is None and self.interface:
-            self._source = interface_ip(self.interface)
+        # Sentinel, not None: an interface with no address must stay resolved.
+        if self._source is _UNRESOLVED:
+            self._source = interface_ip(self.interface) if self.interface else None
         return self._source
 
     def _fetch(self, ip):
@@ -53,7 +69,9 @@ class CastCollector(BaseCollector):
             raise ValueError("CastCollector.collect requires an ip")
         try:
             return parse_eureka_info(self._fetch(ip))
-        except OSError:
-            # Re-resolve next call: a new lease makes the cached source unbindable.
-            self._source = None
-            raise
+        except OSError as e:
+            if not _is_unbindable(e):
+                raise
+        # A new lease made the cached source unbindable; this device is not down.
+        self._source = _UNRESOLVED
+        return parse_eureka_info(self._fetch(ip))

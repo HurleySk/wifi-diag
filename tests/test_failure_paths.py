@@ -12,6 +12,7 @@ reached it.
 The numbers in these tests are the ones measured on the affected Pi.
 """
 
+import json
 import subprocess
 from datetime import datetime, timedelta, timezone
 
@@ -25,7 +26,18 @@ class FakeCompleted:
         self.returncode = returncode
 
 
-GOOD_SPEED_OUTPUT = "Ping: 29.4 ms\nDownload: 84.9 Mbit/s\nUpload: 108.7 Mbit/s\n"
+def legacy_json(download_mbps=84.9, bytes_received=112_000_000):
+    """One `speedtest-cli --json` result, whose speeds are bits per second."""
+    return json.dumps({
+        "download": download_mbps * 1_000_000,
+        "upload": 108.7 * 1_000_000,
+        "ping": 29.4,
+        "bytes_sent": 90_000_000,
+        "bytes_received": bytes_received,
+    })
+
+
+GOOD_SPEED_OUTPUT = legacy_json()
 
 
 def _patch_run(monkeypatch, result):
@@ -42,7 +54,7 @@ class TestSpeedCollectorFailures:
     def _collector(self, monkeypatch, result, before=None, after=None):
         from wifi_diag.collectors import speed
 
-        monkeypatch.setattr(speed, "ookla_available", lambda: False)
+        monkeypatch.setattr(speed, "ookla_binary", lambda: None)
         monkeypatch.setattr(speed, "interface_ip", lambda iface: "192.168.1.196")
         snapshots = iter([before or {}, after or {}])
         monkeypatch.setattr(speed, "rx_byte_counters", lambda: next(snapshots))
@@ -113,7 +125,7 @@ class TestSpeedCollectorFailures:
         from wifi_diag.collectors import speed
 
         seen = {}
-        monkeypatch.setattr(speed, "ookla_available", lambda: False)
+        monkeypatch.setattr(speed, "ookla_binary", lambda: None)
         monkeypatch.setattr(speed, "interface_ip", lambda iface: None)
         monkeypatch.setattr(speed, "rx_byte_counters", lambda: {})
         monkeypatch.setattr(
@@ -160,7 +172,7 @@ class TestSpeedCollectorFailures:
 
         collector = self._collector(
             monkeypatch,
-            FakeCompleted(stdout=GOOD_SPEED_OUTPUT),
+            FakeCompleted(stdout=legacy_json(bytes_received=187_342_813)),
             before={"wlan0": 0, "eth0": 0},
             after={"wlan0": 85_105_778, "eth0": 102_237_035},
         )
@@ -172,7 +184,7 @@ class TestSpeedCollectorFailures:
 
         collector = self._collector(
             monkeypatch,
-            FakeCompleted(stdout=GOOD_SPEED_OUTPUT),
+            FakeCompleted(stdout=legacy_json(bytes_received=100_000_000)),
             before={"wlan0": 0, "eth0": 0},
             after={"wlan0": 60_000_000, "eth0": 40_000_000},
         )
@@ -183,11 +195,68 @@ class TestSpeedCollectorFailures:
         """run2 on the Pi: 111 MB over wlan0 against 1.6 MB of eth0 chatter."""
         collector = self._collector(
             monkeypatch,
-            FakeCompleted(stdout=GOOD_SPEED_OUTPUT),
+            FakeCompleted(stdout=legacy_json(bytes_received=111_000_000)),
             before={"wlan0": 0, "eth0": 0},
             after={"wlan0": 111_026_024, "eth0": 1_600_067},
         )
         assert collector.collect()["download_mbps"] == 84.9
+
+    @pytest.mark.parametrize(
+        "mbps,downloaded,carried",
+        [
+            # Shares of 76% and 55% against the 3.0 MB of eth0 chatter below.
+            (5.0, 9_400_000, 9_412_336),
+            (2.0, 3_750_000, 3_770_112),
+        ],
+    )
+    def test_a_degraded_link_is_recorded_rather_than_discarded(
+        self, monkeypatch, mbps, downloaded, carried
+    ):
+        """The regression that made this tool blind exactly when it mattered.
+
+        Background chatter on the other NIC is a fixed number of bytes, so
+        sharing a denominator with it made the gate tighten as the link slowed:
+        the numerator falls with the link while the noise stays put. Every
+        reading below roughly 15 Mbit/s was thrown away, and the history read
+        as healthy right up to the moment the data stopped. Checking against
+        the byte total the test itself reports is independent of the noise.
+        """
+        collector = self._collector(
+            monkeypatch,
+            FakeCompleted(
+                stdout=legacy_json(download_mbps=mbps, bytes_received=downloaded)
+            ),
+            before={"wlan0": 0, "eth0": 0},
+            after={"wlan0": carried, "eth0": 3_045_407},
+        )
+        reading = collector.collect()
+        assert reading["download_mbps"] == mbps
+        assert reading["interface"] == "wlan0"
+
+    def test_a_reading_is_discarded_when_the_interface_cannot_be_compared(self, monkeypatch):
+        """Counters that cannot be compared mean unattributable, not verified."""
+        from wifi_diag.collectors.speed import WrongInterfaceError
+
+        collector = self._collector(
+            monkeypatch,
+            FakeCompleted(stdout=GOOD_SPEED_OUTPUT),
+            before={"eth0": 0},
+            after={"eth0": 500},
+        )
+        with pytest.raises(WrongInterfaceError, match="cannot be attributed"):
+            collector.collect()
+
+    def test_a_counter_reset_mid_run_discards_rather_than_stores(self, monkeypatch):
+        from wifi_diag.collectors.speed import WrongInterfaceError
+
+        collector = self._collector(
+            monkeypatch,
+            FakeCompleted(stdout=GOOD_SPEED_OUTPUT),
+            before={"wlan0": 900_000_000, "eth0": 0},
+            after={"wlan0": 12_000, "eth0": 500},
+        )
+        with pytest.raises(WrongInterfaceError):
+            collector.collect()
 
 
 OOKLA_JSON = (
@@ -206,9 +275,13 @@ class TestOoklaPath:
     """
 
     def _collector(self, monkeypatch, available=True, result=None, before=None, after=None):
+        import sys as _sys
         from wifi_diag.collectors import speed
 
-        monkeypatch.setattr(speed, "ookla_available", lambda: available)
+        # These describe the Pi, and only Linux has a device-binding flag.
+        monkeypatch.setattr(_sys, "platform", "linux")
+        path = "/usr/local/bin/speedtest" if available else None
+        monkeypatch.setattr(speed, "ookla_binary", lambda: path)
         snapshots = iter([before or {}, after or {}])
         monkeypatch.setattr(speed, "rx_byte_counters", lambda: next(snapshots))
         calls = []
@@ -272,6 +345,83 @@ class TestOoklaPath:
         with pytest.raises(SpeedTestError):
             collector.collect()
 
+    def test_reported_bytes_are_checked_against_the_counters(self, monkeypatch):
+        """The JSON says 192.7 MB; wlan0 carrying 40 MB of it means a split."""
+        from wifi_diag.collectors.speed import WrongInterfaceError
+
+        collector, _ = self._collector(
+            monkeypatch,
+            before={"wlan0": 0, "eth0": 0},
+            after={"wlan0": 40_000_000, "eth0": 155_000_000},
+        )
+        with pytest.raises(WrongInterfaceError, match="21%"):
+            collector.collect()
+
+    def test_windows_gets_no_interface_flag_and_claims_no_provenance(self, monkeypatch):
+        """wlan0 is not a Windows device name, so passing it fails every run."""
+        import sys as _sys
+        from wifi_diag.collectors import speed
+
+        monkeypatch.setattr(_sys, "platform", "win32")
+        monkeypatch.setattr(speed, "ookla_binary", lambda: "speedtest")
+        # What the real thing returns off Linux, so nothing can be verified.
+        monkeypatch.setattr(speed, "rx_byte_counters", lambda: {})
+        calls = []
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd, **k: (calls.append(cmd), FakeCompleted(stdout=OOKLA_JSON))[1],
+        )
+        reading = speed.SpeedCollector("wlan0").collect()
+        assert not any(c.startswith("--interface") for c in calls[0])
+        assert reading["interface"] is None
+
+
+class TestOoklaDetection:
+    """Both clients install a command called `speedtest`; only one can bind."""
+
+    def _probe(self, monkeypatch, versions):
+        from wifi_diag.collectors import speed
+
+        seen = []
+
+        def run(cmd, **kwargs):
+            seen.append(cmd[0])
+            if cmd[0] not in versions:
+                raise FileNotFoundError(2, "No such file or directory")
+            return FakeCompleted(stdout=versions[cmd[0]])
+
+        monkeypatch.setattr(subprocess, "run", run)
+        return speed.ookla_binary(), seen
+
+    def test_the_pip_client_is_not_mistaken_for_ookla(self, monkeypatch):
+        # Real `speedtest-cli 2.1.3 --version` output; no Ookla anywhere in it.
+        found, _ = self._probe(
+            monkeypatch,
+            {"speedtest": "speedtest-cli 2.1.3\nPython 3.11.2\n"},
+        )
+        assert found is None
+
+    def test_the_absolute_path_wins_over_a_shim_earlier_on_path(self, monkeypatch):
+        found, seen = self._probe(
+            monkeypatch,
+            {
+                "/usr/local/bin/speedtest": "Speedtest by Ookla 1.2.0\n",
+                "speedtest": "speedtest-cli 2.1.3\n",
+            },
+        )
+        assert found == "/usr/local/bin/speedtest"
+        assert seen == ["/usr/local/bin/speedtest"]
+
+    def test_ookla_on_path_alone_is_accepted(self, monkeypatch):
+        found, _ = self._probe(
+            monkeypatch, {"speedtest": "Speedtest by Ookla 1.2.0\n"}
+        )
+        assert found == "speedtest"
+
+    def test_no_speedtest_at_all_is_not_an_error(self, monkeypatch):
+        assert self._probe(monkeypatch, {})[0] is None
+
 
 class TestOoklaParser:
     def test_result_object_on_its_own_line_is_found(self):
@@ -288,6 +438,7 @@ class TestOoklaParser:
             "download_mbps": None,
             "upload_mbps": None,
             "ping_ms": None,
+            "download_bytes": None,
         }
 
     def test_garbage_yields_none(self):
@@ -453,6 +604,8 @@ class TestSchedulerWiring:
             assert scheduler.gateway_collector.interface == "wlan9"
             assert scheduler.external_collector.interface == "wlan9"
             assert scheduler.speed_collector.interface == "wlan9"
+            # Omitted once, and reverting the Cast wiring left the suite green.
+            assert scheduler.cast_collector.interface == "wlan9"
         finally:
             store.close()
 
@@ -525,24 +678,42 @@ class TestSchedulerFailureHandling:
         finally:
             store.close()
 
-    def test_a_good_speed_reading_records_its_interface(self, monkeypatch):
+    def _stored_speed_reading(self, monkeypatch, reading):
         scheduler, store = self._scheduler(monkeypatch)
         try:
-            class Good:
+            class Collector:
                 def collect(self):
-                    return {
-                        "download_mbps": 84.9,
-                        "upload_mbps": 108.7,
-                        "ping_ms": 29.4,
-                    }
+                    return dict(reading)
 
-            scheduler.speed_collector = Good()
+            scheduler.speed_collector = Collector()
             scheduler._collect_speed()
             rows = store.get_speed_readings()
             assert len(rows) == 1
-            assert rows[0]["interface"] == scheduler._interface
+            return rows[0]
         finally:
             store.close()
+
+    def test_a_verified_reading_keeps_the_interface_the_collector_confirmed(self, monkeypatch):
+        row = self._stored_speed_reading(
+            monkeypatch,
+            {"download_mbps": 84.9, "upload_mbps": 108.7, "ping_ms": 29.4,
+             "interface": "wlan0"},
+        )
+        assert row["interface"] == "wlan0"
+
+    def test_an_unverified_reading_is_stored_without_claiming_an_interface(self, monkeypatch):
+        """The scheduler used to stamp its configured interface on every row.
+
+        That made provenance a statement of intent, so a Windows ping or a
+        speed test on a host with no byte counters was filed as WiFi, and
+        trends compared it against genuinely verified rows.
+        """
+        row = self._stored_speed_reading(
+            monkeypatch,
+            {"download_mbps": 84.9, "upload_mbps": 108.7, "ping_ms": 29.4,
+             "interface": None},
+        )
+        assert row["interface"] is None
 
 
 class TestCastProbeIsPinned:

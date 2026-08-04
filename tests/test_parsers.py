@@ -156,11 +156,24 @@ class TestSpeedtestParser:
     def test_parse(self):
         from wifi_diag.parsers.speedtest_parser import parse_speedtest
 
-        output = (FIXTURES / "speedtest.txt").read_text()
+        output = (FIXTURES / "speedtest.json").read_text()
         result = parse_speedtest(output)
         assert result["download_mbps"] == 95.67
         assert result["upload_mbps"] == 45.23
         assert result["ping_ms"] == 12.345
+
+    def test_reports_the_bytes_it_downloaded(self):
+        from wifi_diag.parsers.speedtest_parser import parse_speedtest
+
+        # --simple omits this, which is why the collector asks for --json.
+        output = (FIXTURES / "speedtest.json").read_text()
+        assert parse_speedtest(output)["download_bytes"] == 119_586_816
+
+    def test_speeds_are_bits_per_second_unlike_ookla(self):
+        from wifi_diag.parsers.speedtest_parser import parse_speedtest
+
+        result = parse_speedtest('{"download": 8000000.0, "upload": 1000000.0}')
+        assert result["download_mbps"] == 8.0
 
     def test_parse_empty(self):
         from wifi_diag.parsers.speedtest_parser import parse_speedtest
@@ -169,6 +182,13 @@ class TestSpeedtestParser:
         assert result["download_mbps"] is None
         assert result["upload_mbps"] is None
         assert result["ping_ms"] is None
+        assert result["download_bytes"] is None
+
+    def test_progress_line_before_the_object_is_tolerated(self):
+        from wifi_diag.parsers.speedtest_parser import parse_speedtest
+
+        output = "Retrieving speedtest.net configuration...\n" '{"download": 5000000.0}\n'
+        assert parse_speedtest(output)["download_mbps"] == 5.0
 
 
 class TestEurekaParser:

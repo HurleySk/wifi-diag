@@ -16,7 +16,9 @@ pip3 install speedtest-cli --break-system-packages 2>/dev/null || pip3 install s
 
 # Ookla's CLI forces egress with SO_BINDTODEVICE; speedtest-cli cannot.
 OOKLA_VERSION=1.2.0
-if command -v speedtest >/dev/null 2>&1 && speedtest --version 2>&1 | grep -q Ookla; then
+# By path, not by name: pip's `speedtest` shim precedes this on interactive PATH.
+OOKLA_BIN=/usr/local/bin/speedtest
+if [ -x "$OOKLA_BIN" ] && "$OOKLA_BIN" --version 2>&1 | grep -q Ookla; then
     echo "Ookla speedtest CLI already installed."
 else
     case "$(uname -m)" in
@@ -34,8 +36,8 @@ else
         OOKLA_URL="https://install.speedtest.net/app/cli/ookla-speedtest-${OOKLA_VERSION}-linux-${OOKLA_ARCH}.tgz"
         if curl -sSfL -o "$OOKLA_TMP/ookla.tgz" "$OOKLA_URL" \
            && tar xzf "$OOKLA_TMP/ookla.tgz" -C "$OOKLA_TMP" speedtest; then
-            sudo install -m 755 "$OOKLA_TMP/speedtest" /usr/local/bin/speedtest
-            echo "Installed /usr/local/bin/speedtest"
+            sudo install -m 755 "$OOKLA_TMP/speedtest" "$OOKLA_BIN"
+            echo "Installed $OOKLA_BIN"
         else
             echo "Could not install the Ookla CLI; speed tests will use speedtest-cli."
             echo "  On a dual-homed host expect some readings to be discarded."

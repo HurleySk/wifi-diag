@@ -30,6 +30,8 @@ case "$ACTION" in
         fi
         # Rebuild rather than append: the lease may have handed us a new address.
         clear_rules
+        # A move to another subnet otherwise leaves the old on-link route behind.
+        ip route flush table "$TABLE" 2>/dev/null
         ip route replace default via "$gw" dev "$WIFI_IF" table "$TABLE"
         # Without the on-link route, LAN probes would hairpin via the gateway.
         [ -n "$subnet" ] \
