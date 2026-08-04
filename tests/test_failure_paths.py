@@ -42,6 +42,7 @@ class TestSpeedCollectorFailures:
     def _collector(self, monkeypatch, result, before=None, after=None):
         from wifi_diag.collectors import speed
 
+        monkeypatch.setattr(speed, "ookla_available", lambda: False)
         monkeypatch.setattr(speed, "interface_ip", lambda iface: "192.168.1.196")
         snapshots = iter([before or {}, after or {}])
         monkeypatch.setattr(speed, "rx_byte_counters", lambda: next(snapshots))
@@ -112,6 +113,7 @@ class TestSpeedCollectorFailures:
         from wifi_diag.collectors import speed
 
         seen = {}
+        monkeypatch.setattr(speed, "ookla_available", lambda: False)
         monkeypatch.setattr(speed, "interface_ip", lambda iface: None)
         monkeypatch.setattr(speed, "rx_byte_counters", lambda: {})
         monkeypatch.setattr(
@@ -186,6 +188,113 @@ class TestSpeedCollectorFailures:
             after={"wlan0": 111_026_024, "eth0": 1_600_067},
         )
         assert collector.collect()["download_mbps"] == 84.9
+
+
+OOKLA_JSON = (
+    '{"type":"result","timestamp":"2026-08-04T14:12:50Z",'
+    '"ping":{"jitter":1.903,"latency":5.855},'
+    '"download":{"bandwidth":13261655,"bytes":192730004,"elapsed":15010},'
+    '"upload":{"bandwidth":12256386,"bytes":80546340,"elapsed":6607}}'
+)
+
+
+class TestOoklaPath:
+    """Ookla's CLI binds with SO_BINDTODEVICE, so egress is forced not requested.
+
+    Captured from the affected Pi, where --interface=wlan0 put 206.9 MB on
+    wlan0 against 3.0 MB of eth0 background chatter.
+    """
+
+    def _collector(self, monkeypatch, available=True, result=None, before=None, after=None):
+        from wifi_diag.collectors import speed
+
+        monkeypatch.setattr(speed, "ookla_available", lambda: available)
+        snapshots = iter([before or {}, after or {}])
+        monkeypatch.setattr(speed, "rx_byte_counters", lambda: next(snapshots))
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            return result if result is not None else FakeCompleted(stdout=OOKLA_JSON)
+
+        monkeypatch.setattr(subprocess, "run", run)
+        return speed.SpeedCollector("wlan0"), calls
+
+    def test_binds_to_the_interface_by_name(self, monkeypatch):
+        collector, calls = self._collector(
+            monkeypatch,
+            before={"wlan0": 0, "eth0": 0},
+            after={"wlan0": 206_946_617, "eth0": 3_045_407},
+        )
+        collector.collect()
+        assert "--interface=wlan0" in calls[0]
+        assert "--source" not in calls[0]
+
+    def test_bandwidth_is_bytes_per_second_not_bits(self, monkeypatch):
+        collector, _ = self._collector(
+            monkeypatch,
+            before={"wlan0": 0, "eth0": 0},
+            after={"wlan0": 206_946_617, "eth0": 3_045_407},
+        )
+        reading = collector.collect()
+        # 13,261,655 B/s * 8 / 1e6. Reading the field as bits understates by 8x.
+        assert reading["download_mbps"] == 106.09
+        assert reading["upload_mbps"] == 98.05
+        assert reading["ping_ms"] == 5.86
+
+    def test_falls_back_to_speedtest_cli_when_absent(self, monkeypatch):
+        from wifi_diag.collectors import speed
+
+        monkeypatch.setattr(speed, "interface_ip", lambda iface: "192.168.1.196")
+        collector, calls = self._collector(
+            monkeypatch,
+            available=False,
+            result=FakeCompleted(stdout=GOOD_SPEED_OUTPUT),
+        )
+        collector.collect()
+        assert calls[0][0] == "speedtest-cli"
+        assert "--source" in calls[0]
+
+    def test_a_failed_run_still_raises(self, monkeypatch):
+        from wifi_diag.collectors.speed import SpeedTestError
+
+        collector, _ = self._collector(
+            monkeypatch,
+            result=FakeCompleted(stdout="", stderr="[error] no servers\n", returncode=1),
+        )
+        with pytest.raises(SpeedTestError, match="no servers"):
+            collector.collect()
+
+    def test_unparseable_json_raises(self, monkeypatch):
+        from wifi_diag.collectors.speed import SpeedTestError
+
+        collector, _ = self._collector(monkeypatch, result=FakeCompleted(stdout="not json"))
+        with pytest.raises(SpeedTestError):
+            collector.collect()
+
+
+class TestOoklaParser:
+    def test_result_object_on_its_own_line_is_found(self):
+        from wifi_diag.parsers.ookla_parser import parse_ookla
+
+        noisy = "Speedtest by Ookla\n" + OOKLA_JSON + "\n"
+        assert parse_ookla(noisy)["download_mbps"] == 106.09
+
+    def test_missing_sections_yield_none_rather_than_zero(self):
+        from wifi_diag.parsers.ookla_parser import parse_ookla
+
+        reading = parse_ookla('{"type":"result"}')
+        assert reading == {
+            "download_mbps": None,
+            "upload_mbps": None,
+            "ping_ms": None,
+        }
+
+    def test_garbage_yields_none(self):
+        from wifi_diag.parsers.ookla_parser import parse_ookla
+
+        assert parse_ookla("")["download_mbps"] is None
+        assert parse_ookla("[]")["download_mbps"] is None
 
 
 class TestLatencyCollectorFailures:

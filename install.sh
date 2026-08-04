@@ -14,6 +14,36 @@ pip3 install -e . --break-system-packages 2>/dev/null || pip3 install -e .
 echo "Installing speedtest-cli..."
 pip3 install speedtest-cli --break-system-packages 2>/dev/null || pip3 install speedtest-cli
 
+# Ookla's CLI forces egress with SO_BINDTODEVICE; speedtest-cli cannot.
+OOKLA_VERSION=1.2.0
+if command -v speedtest >/dev/null 2>&1 && speedtest --version 2>&1 | grep -q Ookla; then
+    echo "Ookla speedtest CLI already installed."
+else
+    case "$(uname -m)" in
+        x86_64)  OOKLA_ARCH=x86_64 ;;
+        aarch64) OOKLA_ARCH=aarch64 ;;
+        armv7l)  OOKLA_ARCH=armhf ;;
+        armv6l)  OOKLA_ARCH=armel ;;
+        *)       OOKLA_ARCH="" ;;
+    esac
+    if [ -z "$OOKLA_ARCH" ]; then
+        echo "No Ookla build for $(uname -m); speed tests will use speedtest-cli."
+    else
+        echo "Installing Ookla speedtest CLI ($OOKLA_ARCH)..."
+        OOKLA_TMP="$(mktemp -d)"
+        OOKLA_URL="https://install.speedtest.net/app/cli/ookla-speedtest-${OOKLA_VERSION}-linux-${OOKLA_ARCH}.tgz"
+        if curl -sSfL -o "$OOKLA_TMP/ookla.tgz" "$OOKLA_URL" \
+           && tar xzf "$OOKLA_TMP/ookla.tgz" -C "$OOKLA_TMP" speedtest; then
+            sudo install -m 755 "$OOKLA_TMP/speedtest" /usr/local/bin/speedtest
+            echo "Installed /usr/local/bin/speedtest"
+        else
+            echo "Could not install the Ookla CLI; speed tests will use speedtest-cli."
+            echo "  On a dual-homed host expect some readings to be discarded."
+        fi
+        rm -rf "$OOKLA_TMP"
+    fi
+fi
+
 CURRENT_USER="$(whoami)"
 INSTALL_DIR="$(pwd)"
 

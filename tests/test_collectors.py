@@ -193,6 +193,7 @@ class TestSpeedInterfaceVerification:
 
         snapshots = iter([before, after])
         monkeypatch.setattr(subprocess, "run", run)
+        monkeypatch.setattr(speed, "ookla_available", lambda: False)
         monkeypatch.setattr(speed, "interface_ip", lambda i: ip)
         monkeypatch.setattr(speed, "rx_byte_counters", lambda: next(snapshots))
         return calls
@@ -244,6 +245,7 @@ class TestSpeedInterfaceVerification:
 
         calls = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **k: (calls.append(cmd), Result())[1])
+        monkeypatch.setattr(speed, "ookla_available", lambda: False)
         monkeypatch.setattr(speed, "rx_byte_counters", lambda: pytest.fail("should not snapshot"))
         assert SpeedCollector().collect()["download_mbps"] == 400.0
         assert "--source" not in calls[0]

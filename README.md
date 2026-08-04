@@ -200,17 +200,21 @@ variable and writes it into the systemd unit.
 
 - **Latency** uses `ping -I <device>`, which sets `SO_BINDTODEVICE` and forces
   egress. This works with no additional setup.
-- **Speed** can only pass a source address to `speedtest-cli`, and a source
-  address does not choose a route. Worse, `speedtest-cli` opens parallel
-  connections and binds only some of them, so a single run can straddle both
-  links: one measured run put 102MB over eth0 and 85MB over wlan0 and reported
-  140 Mbit/s, a figure describing neither. So the collector brackets each run
-  with per-interface byte counters and **discards the reading** unless at least
-  90% of the bytes moved over the named interface. A missing reading is
-  recoverable; a wrong one that reads as a healthy WiFi link is not.
+- **Speed** prefers [Ookla's official CLI](https://www.speedtest.net/apps/cli),
+  whose `--interface` binds with `SO_BINDTODEVICE` and forces egress the same
+  way `ping -I` does. `install.sh` fetches it automatically.
 
-  Expect some runs to be discarded on a dual-homed host. Each one says so in
-  the journal, with the share that did go the right way.
+  Where it is unavailable the collector falls back to `speedtest-cli`, which
+  can only bind a source address. That is weaker than it looks: `speedtest-cli`
+  opens parallel connections and binds only some of them, so one run measured
+  here put 102MB over eth0 and 85MB over wlan0 and reported 140 Mbit/s, a
+  figure describing neither link.
+
+  Either way the collector brackets each run with per-interface byte counters
+  and **discards the reading** unless at least 90% of the bytes moved over the
+  named interface. A missing reading is recoverable; a wrong one that reads as
+  a healthy WiFi link is not. Discards are logged with the share that did go
+  the right way.
 - **Cast reachability** binds its HTTP probe to the WiFi address, so a device
   that is unreachable over WiFi is not recorded as up because the wire
   answered for it.
