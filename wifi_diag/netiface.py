@@ -59,6 +59,30 @@ def rx_byte_counters():
     return counters
 
 
+def interface_share(before, after, iface):
+    """Fraction of the bytes moved between snapshots that iface carried.
+
+    Returns None when the snapshots cannot be compared or nothing moved.
+    speedtest-cli opens parallel connections and binds only some of them to
+    the source address, so a run can straddle two links; a share well under 1
+    means the reading describes neither link on its own.
+    """
+    if before.keys() != after.keys() or iface not in before:
+        return None
+    total = 0
+    carried = 0
+    for name in before:
+        delta = after[name] - before[name]
+        if delta < 0:
+            return None
+        total += delta
+        if name == iface:
+            carried = delta
+    if total <= 0:
+        return None
+    return carried / total
+
+
 def busiest_interface(before, after):
     """Name the interface that received the most bytes between two snapshots.
 

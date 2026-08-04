@@ -146,6 +146,47 @@ class TestSpeedCollectorFailures:
         with pytest.raises(WrongInterfaceError):
             collector.collect()
 
+    def test_a_run_split_across_both_links_is_rejected(self, monkeypatch):
+        """Measured on the Pi: 102 MB over eth0 and 85 MB over wlan0 at once.
+
+        speedtest-cli opens parallel connections and binds only some to the
+        source address. It reported 140 Mbit/s, which is neither the WiFi link
+        nor the wire. Naming the busiest interface alone would have caught this
+        one, but not a split that happens to favour wlan0.
+        """
+        from wifi_diag.collectors.speed import WrongInterfaceError
+
+        collector = self._collector(
+            monkeypatch,
+            FakeCompleted(stdout=GOOD_SPEED_OUTPUT),
+            before={"wlan0": 0, "eth0": 0},
+            after={"wlan0": 85_105_778, "eth0": 102_237_035},
+        )
+        with pytest.raises(WrongInterfaceError, match="45%"):
+            collector.collect()
+
+    def test_a_split_favouring_the_right_interface_is_still_rejected(self, monkeypatch):
+        from wifi_diag.collectors.speed import WrongInterfaceError
+
+        collector = self._collector(
+            monkeypatch,
+            FakeCompleted(stdout=GOOD_SPEED_OUTPUT),
+            before={"wlan0": 0, "eth0": 0},
+            after={"wlan0": 60_000_000, "eth0": 40_000_000},
+        )
+        with pytest.raises(WrongInterfaceError):
+            collector.collect()
+
+    def test_ordinary_background_noise_does_not_reject_a_clean_run(self, monkeypatch):
+        """run2 on the Pi: 111 MB over wlan0 against 1.6 MB of eth0 chatter."""
+        collector = self._collector(
+            monkeypatch,
+            FakeCompleted(stdout=GOOD_SPEED_OUTPUT),
+            before={"wlan0": 0, "eth0": 0},
+            after={"wlan0": 111_026_024, "eth0": 1_600_067},
+        )
+        assert collector.collect()["download_mbps"] == 84.9
+
 
 class TestLatencyCollectorFailures:
     def _collector(self, monkeypatch, result):

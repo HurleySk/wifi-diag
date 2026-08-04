@@ -1,12 +1,20 @@
 import subprocess
 
 from .base import BaseCollector
-from ..netiface import busiest_interface, interface_ip, rx_byte_counters
+from ..netiface import (
+    busiest_interface,
+    interface_ip,
+    interface_share,
+    rx_byte_counters,
+)
 from ..parsers.speedtest_parser import parse_speedtest
 
 
 # A run takes 30-60s; the ceiling stops a wedged one stalling the whole loop.
 SPEEDTEST_TIMEOUT_SECS = 180
+
+# A clean run measures 98%+ on the named interface; a split is worth nothing.
+MIN_INTERFACE_SHARE = 0.9
 
 
 class SpeedTestError(RuntimeError):
@@ -57,10 +65,12 @@ class SpeedCollector(BaseCollector):
             )
 
         if self.interface and before and after:
-            carried = busiest_interface(before, after)
-            if carried is not None and carried != self.interface:
+            share = interface_share(before, after, self.interface)
+            if share is not None and share < MIN_INTERFACE_SHARE:
+                busiest = busiest_interface(before, after)
                 raise WrongInterfaceError(
-                    f"speed test traffic left via {carried}, not {self.interface}. "
-                    "Discarding the reading; see 'Dual-homed hosts' in the README."
+                    f"only {share:.0%} of the traffic left via {self.interface} "
+                    f"(most went via {busiest}). Discarding the reading; "
+                    "see 'Dual-homed hosts' in the README."
                 )
         return reading
