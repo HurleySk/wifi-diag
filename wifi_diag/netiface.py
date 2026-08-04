@@ -35,8 +35,14 @@ def interface_ip(iface):
     return m.group(1) if m else None
 
 
+def _is_physical(entry):
+    """True when entry is a real NIC: only a driver-backed device has this symlink."""
+    # wg0 reports the plaintext bytes wlan0 already counted as ciphertext.
+    return (entry / "device").exists()
+
+
 def rx_byte_counters():
-    """Snapshot {interface: rx_bytes}, or {} where the kernel does not expose it."""
+    """Snapshot {interface: rx_bytes} for physical interfaces, or {} off Linux."""
     counters = {}
     try:
         entries = list(_SYS_NET.iterdir())
@@ -44,6 +50,8 @@ def rx_byte_counters():
         return {}
     for entry in entries:
         try:
+            if not _is_physical(entry):
+                continue
             raw = (entry / "statistics" / "rx_bytes").read_text().strip()
             counters[entry.name] = int(raw)
         except (OSError, ValueError):
@@ -54,15 +62,18 @@ def rx_byte_counters():
 def busiest_interface(before, after):
     """Name the interface that received the most bytes between two snapshots.
 
-    Returns None when the snapshots are unusable, when a counter wrapped or
-    the interface disappeared mid-measurement, or when nothing moved. Callers
-    treat None as "cannot tell" rather than as a negative result.
+    Returns None when a counter went backwards, when an interface appeared or
+    vanished mid-measurement, or when nothing moved. Callers read None as
+    "cannot tell", which beats naming a winner from an incomplete comparison.
     """
+    if before.keys() != after.keys():
+        return None
     deltas = {}
-    for name in before.keys() & after.keys():
-        if name == "lo":
-            continue
+    for name in before:
         delta = after[name] - before[name]
+        if delta < 0:
+            # A wrap or device reset makes every delta in the pair suspect.
+            return None
         if delta > 0:
             deltas[name] = delta
     if not deltas:

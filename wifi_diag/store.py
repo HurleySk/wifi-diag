@@ -11,6 +11,7 @@ class DiagStore:
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
+        self._migrate()
 
     def _create_tables(self):
         self.conn.executescript("""
@@ -49,7 +50,8 @@ class DiagStore:
                 rtt_min_ms REAL,
                 rtt_avg_ms REAL,
                 rtt_max_ms REAL,
-                packet_loss_pct REAL
+                packet_loss_pct REAL,
+                interface TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_latency_host_ts
                 ON latency_readings(host, timestamp);
@@ -60,7 +62,8 @@ class DiagStore:
                 host TEXT NOT NULL,
                 download_mbps REAL,
                 upload_mbps REAL,
-                ping_ms REAL
+                ping_ms REAL,
+                interface TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_speed_host_ts
                 ON speed_readings(host, timestamp);
@@ -122,6 +125,17 @@ class DiagStore:
                 ON ap_scans(bssid, timestamp);
         """)
 
+    def _migrate(self):
+        """Add columns introduced after a database may already exist."""
+        # NULL interface means unknown provenance, not WiFi.
+        for table in ("latency_readings", "speed_readings"):
+            existing = {
+                r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")
+            }
+            if "interface" not in existing:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN interface TEXT")
+        self.conn.commit()
+
     def _query(self, table, host=None, target=None, mac=None, start=None, end=None):
         query = f"SELECT * FROM {table} WHERE 1=1"
         params = []
@@ -165,23 +179,27 @@ class DiagStore:
         self.conn.commit()
 
     def insert_latency_reading(self, reading):
+        params = dict(reading)
+        params.setdefault("interface", None)
         self.conn.execute(
             """INSERT INTO latency_readings
                (timestamp, host, target, rtt_min_ms, rtt_avg_ms,
-                rtt_max_ms, packet_loss_pct)
+                rtt_max_ms, packet_loss_pct, interface)
                VALUES (:timestamp, :host, :target, :rtt_min_ms,
-                :rtt_avg_ms, :rtt_max_ms, :packet_loss_pct)""",
-            reading,
+                :rtt_avg_ms, :rtt_max_ms, :packet_loss_pct, :interface)""",
+            params,
         )
         self.conn.commit()
 
     def insert_speed_reading(self, reading):
+        params = dict(reading)
+        params.setdefault("interface", None)
         self.conn.execute(
             """INSERT INTO speed_readings
-               (timestamp, host, download_mbps, upload_mbps, ping_ms)
+               (timestamp, host, download_mbps, upload_mbps, ping_ms, interface)
                VALUES (:timestamp, :host, :download_mbps, :upload_mbps,
-                :ping_ms)""",
-            reading,
+                :ping_ms, :interface)""",
+            params,
         )
         self.conn.commit()
 

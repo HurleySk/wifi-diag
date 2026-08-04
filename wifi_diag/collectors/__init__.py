@@ -28,12 +28,12 @@ def create_speed_collector(dry_run=False, interface=None):
     return SpeedCollector(interface)
 
 
-def create_cast_collector(dry_run=False):
+def create_cast_collector(dry_run=False, interface=None):
     if dry_run:
         from .cast_mock import CastMockCollector
         return CastMockCollector()
     from .cast import CastCollector
-    return CastCollector()
+    return CastCollector(interface=interface)
 
 
 def create_scan_collector(dry_run=False):

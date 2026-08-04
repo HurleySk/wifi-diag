@@ -11,14 +11,11 @@ from .analysis.devices import device_summary
 
 
 def main(argv=None):
-    # On Windows the console default encoding is often cp1252, which cannot
-    # encode the Unicode warning/box-drawing characters produced by the
-    # analysis modules. Force UTF-8 so print() never raises UnicodeEncodeError.
+    # Windows consoles default to cp1252 and raise on the box-drawing output.
     if sys.stdout.encoding is None or sys.stdout.encoding.lower() != "utf-8":
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    # Shared so --db can appear either before or after the subcommand, e.g.
-    # both `wifi-diag --db X status` and `wifi-diag status --db X` work.
+    # Shared so --db works either before or after the subcommand.
     db_parent = argparse.ArgumentParser(add_help=False)
     db_parent.add_argument(
         "--db", default=None,

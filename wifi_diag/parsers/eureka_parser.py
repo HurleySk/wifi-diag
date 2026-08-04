@@ -15,9 +15,7 @@ def parse_eureka_info(text: str) -> dict:
     if not isinstance(data, dict) or not data.get("mac_address"):
         raise ValueError("eureka_info response has no mac_address")
 
-    # An empty-string BSSID means the firmware declines to report it. Treat
-    # that as unknown rather than as a distinct value, so it never registers
-    # as a band or BSSID change.
+    # An empty BSSID means the firmware declines to report it, so unknown.
     bssid = data.get("bssid") or None
 
     ethernet = data.get("ethernet_connected")

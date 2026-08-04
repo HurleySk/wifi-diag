@@ -155,8 +155,7 @@ class TestLatencyInterfaceBinding:
         monkeypatch.setattr(_sys, "platform", "linux")
         cmd = LatencyCollector("8.8.8.8", 3, "wlan0")._command()
         assert "-I" in cmd
-        # The device name, not the interface address: only SO_BINDTODEVICE
-        # forces egress, source-address binding still routes by metric.
+        # Device name, not address: only SO_BINDTODEVICE forces egress.
         assert cmd[cmd.index("-I") + 1] == "wlan0"
 
     def test_unbound_when_no_interface_given(self, monkeypatch):
@@ -183,6 +182,8 @@ class TestSpeedInterfaceVerification:
 
         class Result:
             stdout = "Ping: 20.0 ms\nDownload: 53.5 Mbit/s\nUpload: 55.6 Mbit/s\n"
+            stderr = ""
+            returncode = 0
 
         calls = []
 
@@ -217,9 +218,7 @@ class TestSpeedInterfaceVerification:
     def test_rejects_reading_that_escaped_over_another_interface(self, monkeypatch):
         from wifi_diag.collectors.speed import SpeedCollector, WrongInterfaceError
 
-        # This is the real-world failure: eth0 has the lower route metric, so
-        # the test ran over the wire and reported a speed the WiFi link cannot
-        # reach. Storing it would look like a healthy result.
+        # The real failure: eth0 had the lower metric, so the test ran on wire.
         self._patch(
             monkeypatch, {"wlan0": 0, "eth0": 0}, {"wlan0": 4_000, "eth0": 500_000_000}
         )
@@ -229,8 +228,7 @@ class TestSpeedInterfaceVerification:
     def test_keeps_reading_when_counters_are_unavailable(self, monkeypatch):
         from wifi_diag.collectors.speed import SpeedCollector
 
-        # No /sys/class/net (Windows, containers). Unverifiable is not the same
-        # as wrong, so the reading stands.
+        # No /sys/class/net: unverifiable is not wrong, so the reading stands.
         self._patch(monkeypatch, {}, {})
         assert SpeedCollector("wlan0").collect()["upload_mbps"] == 55.6
 
@@ -241,6 +239,8 @@ class TestSpeedInterfaceVerification:
 
         class Result:
             stdout = "Download: 400.0 Mbit/s\n"
+            stderr = ""
+            returncode = 0
 
         calls = []
         monkeypatch.setattr(subprocess, "run", lambda cmd, **k: (calls.append(cmd), Result())[1])
@@ -257,35 +257,12 @@ class TestBusiestInterface:
             {"wlan0": 0, "eth0": 0}, {"wlan0": 10, "eth0": 900}
         ) == "eth0"
 
-    def test_ignores_loopback(self):
-        from wifi_diag.netiface import busiest_interface
-
-        assert busiest_interface(
-            {"lo": 0, "wlan0": 0}, {"lo": 10_000, "wlan0": 5}
-        ) == "wlan0"
-
     def test_returns_none_when_nothing_moved(self):
         from wifi_diag.netiface import busiest_interface
 
         assert busiest_interface({"wlan0": 7}, {"wlan0": 7}) is None
 
-    def test_ignores_interfaces_that_vanished_between_snapshots(self):
-        from wifi_diag.netiface import busiest_interface
-
-        assert busiest_interface(
-            {"wlan0": 0, "usb0": 0}, {"wlan0": 500}
-        ) == "wlan0"
-
-
-class TestSchedulerInterfaceWiring:
-    def test_probes_are_bound_to_the_configured_wifi_interface(self):
-        from wifi_diag import config
-        from wifi_diag.collectors import create_latency_collector, create_speed_collector
-
-        latency = create_latency_collector("8.8.8.8", 3, False, config.WIFI_INTERFACE)
-        speed = create_speed_collector(False, config.WIFI_INTERFACE)
-        assert latency.interface == config.WIFI_INTERFACE
-        assert speed.interface == config.WIFI_INTERFACE
+    # Loopback and vanished-interface cases moved to test_failure_paths.py.
 
 
 class TestScanFactory:

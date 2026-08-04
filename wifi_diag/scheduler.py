@@ -1,5 +1,6 @@
 import signal
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -11,6 +12,7 @@ from .collectors import (
     create_speed_collector,
     create_wifi_collector,
 )
+from .collectors.speed import SpeedTestError, WrongInterfaceError
 from .discovery import discover_cast_devices
 from .events import detect_cast_events
 
@@ -23,10 +25,7 @@ class DiagScheduler:
         self._last_band = {}
         self._last_freq = {}
 
-        # Every probe is pinned to the WiFi interface. On a host with a second
-        # route to the internet the routing table would otherwise prefer it -
-        # usually the wired one - and the readings would describe that link
-        # instead, with nothing in the numbers to give it away.
+        # Pinned, or a dual-homed host measures the wire and never says so.
         self._interface = config.WIFI_INTERFACE
 
         self.wifi_collector = create_wifi_collector(dry_run)
@@ -37,10 +36,9 @@ class DiagScheduler:
             config.EXTERNAL_TARGET, config.PING_COUNT, dry_run, self._interface
         )
         self.speed_collector = create_speed_collector(dry_run, self._interface)
-        self.cast_collector = create_cast_collector(dry_run)
+        self.cast_collector = create_cast_collector(dry_run, self._interface)
         self.scan_collector = create_scan_collector(dry_run)
-        # Seed from stored scans so a failed first scan does not force every
-        # reading to band NULL for the life of the process.
+        # Seeded so a failed first scan does not force band NULL for the process.
         try:
             self._band_map = store.get_bssid_band_map()
         except Exception:
@@ -52,9 +50,11 @@ class DiagScheduler:
 
     def run(self):
         self.running = True
-        signal.signal(signal.SIGINT, self._handle_stop)
-        if sys.platform != "win32":
-            signal.signal(signal.SIGTERM, self._handle_stop)
+        # Only the main thread may install handlers; elsewhere stop() is it.
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGINT, self._handle_stop)
+            if sys.platform != "win32":
+                signal.signal(signal.SIGTERM, self._handle_stop)
 
         last_wifi = 0.0
         last_latency = 0.0
@@ -132,6 +132,7 @@ class DiagScheduler:
                 reading = collector.collect()
                 reading["timestamp"] = self._now_iso()
                 reading["host"] = config.HOSTNAME
+                reading["interface"] = self._interface
                 self.store.insert_latency_reading(reading)
             except Exception as e:
                 print(f"  Latency collection error: {e}")
@@ -139,11 +140,22 @@ class DiagScheduler:
     def _collect_speed(self):
         try:
             reading = self.speed_collector.collect()
-            reading["timestamp"] = self._now_iso()
-            reading["host"] = config.HOSTNAME
-            self.store.insert_speed_reading(reading)
+        except WrongInterfaceError as e:
+            print(f"  Speed reading discarded: {e}")
+            return
+        except SpeedTestError as e:
+            print(f"  Speed test failed, nothing stored: {e}")
+            return
         except Exception as e:
             print(f"  Speed collection error: {e}")
+            return
+        try:
+            reading["timestamp"] = self._now_iso()
+            reading["host"] = config.HOSTNAME
+            reading["interface"] = self._interface
+            self.store.insert_speed_reading(reading)
+        except Exception as e:
+            print(f"  Speed store error: {e}")
 
     def _collect_scan(self):
         try:
@@ -185,8 +197,7 @@ class DiagScheduler:
             discovered = [{"ip": ip, "name": None, "model": None}
                           for ip in self.cast_collector.ips()]
 
-        # Discovery and static entries have no MAC yet; they are probed by IP
-        # and identified from the eureka_info response.
+        # No MAC yet: probed by IP and identified from the eureka_info response.
         extra_ips = [d["ip"] for d in discovered] + list(config.CAST_STATIC_IPS)
         known_ips = {t.get("ip") for t in self._targets.values()}
         models = {d["ip"]: d.get("model") for d in discovered}
@@ -196,14 +207,10 @@ class DiagScheduler:
         unidentified_ips, models = self._refresh_targets()
         ts = self._now_iso()
 
-        # One reading per device per cycle, no matter how many addresses we
-        # probe it at.
+        # One reading per device per cycle, however many addresses we probe.
         seen = set()
 
-        # Probe discovered and static addresses first: they carry current DHCP
-        # truth. Resolving them before the registry stops a device that changed
-        # lease from being probed twice - once at its stale address, producing a
-        # fabricated dropout, and once at its real one.
+        # Current DHCP truth first, or a re-leased device is probed twice.
         for ip in unidentified_ips:
             self._probe_cast_device(None, ip, None, models.get(ip), ts, seen)
 
@@ -228,16 +235,13 @@ class DiagScheduler:
             mac = info["mac"]
             name = info.get("name") or known_name
             if known_mac and known_mac != mac:
-                # This address now belongs to a different device. Drop the stale
-                # mapping, otherwise the old MAC keeps probing an address it no
-                # longer owns and both devices report bogus state forever.
+                # The address moved: a stale mapping makes both devices report bogus state.
                 self._targets.pop(known_mac, None)
         elif known_mac:
             mac = known_mac
             name = known_name
         else:
-            # Never seen this device successfully; nothing to attribute the
-            # reading to, so drop it rather than inventing an identity.
+            # Never seen successfully: drop it rather than invent an identity.
             return
 
         if mac in seen:
@@ -304,10 +308,7 @@ class DiagScheduler:
             except Exception as e:
                 print(f"  Cast event store error: {e}")
 
-        # Carry the last known uptime forward across an unreachable sample. A
-        # rebooting device usually misses a poll, so comparing against the
-        # immediately preceding reading (uptime NULL) would hide every reboot
-        # behind the dropout that accompanies it.
+        # Carry uptime across a dropout, or the reboot hides behind it.
         remembered = reading
         if reading["uptime_secs"] is None and prev is not None:
             remembered = dict(reading)

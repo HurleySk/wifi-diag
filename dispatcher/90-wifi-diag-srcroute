@@ -1,44 +1,44 @@
 #!/bin/sh
-# Installed by wifi-diag into /etc/NetworkManager/dispatcher.d/.
-#
-# On a host with more than one route to the internet - a Pi wired to eth0 while
-# also associated on wlan0 - the kernel sends everything out the lower-metric
-# interface, normally the wire. wifi-diag pins its probes to the WiFi
-# interface, but for the speed test that means binding a source address, and a
-# source address alone does not choose a route.
-#
-# This adds a policy rule so traffic sourced from the WiFi address egresses
-# over the WiFi interface. Nothing else on the system sources traffic from that
-# address, so nothing else is affected.
-#
-# To remove: delete this file, then `ip rule del table 200` until it errors.
+# Installed by wifi-diag into /etc/NetworkManager/dispatcher.d/. See README.
 
 IFACE="$1"
 ACTION="$2"
 WIFI_IF="__WIFI_IF__"
 TABLE=200
+# Below the main-table lookup at 32766 and clear of wg-quick at 32764/32765.
+PRIORITY=20200
 
 [ "$IFACE" = "$WIFI_IF" ] || exit 0
 
+# Deletes by priority, then sweeps rules left by versions that set none.
 clear_rules() {
+    while ip rule del pref "$PRIORITY" table "$TABLE" 2>/dev/null; do :; done
     while ip rule del table "$TABLE" 2>/dev/null; do :; done
 }
 
 case "$ACTION" in
-    up|dhcp4-change)
+    up|dhcp4-change|reapply)
         addr=$(ip -4 -o addr show dev "$WIFI_IF" 2>/dev/null \
                | awk '{print $4}' | cut -d/ -f1 | head -1)
         gw=$(ip -4 route show default dev "$WIFI_IF" 2>/dev/null \
              | awk '{print $3}' | head -1)
-        [ -n "$addr" ] && [ -n "$gw" ] || exit 0
+        subnet=$(ip -4 -o route show dev "$WIFI_IF" scope link 2>/dev/null \
+                 | awk '{print $1}' | head -1)
+        if [ -z "$addr" ] || [ -z "$gw" ]; then
+            echo "wifi-diag: $WIFI_IF has no address or default gateway yet; policy routing not applied" >&2
+            exit 0
+        fi
         # Rebuild rather than append: the lease may have handed us a new address.
         clear_rules
         ip route replace default via "$gw" dev "$WIFI_IF" table "$TABLE"
-        ip rule add from "$addr" table "$TABLE"
+        # Without the on-link route, LAN probes would hairpin via the gateway.
+        [ -n "$subnet" ] \
+            && ip route replace "$subnet" dev "$WIFI_IF" src "$addr" table "$TABLE"
+        ip rule add pref "$PRIORITY" from "$addr" table "$TABLE"
         ;;
     down)
+        # The routes in table 200 are inert once no rule points at it.
         clear_rules
-        ip route flush table "$TABLE" 2>/dev/null || true
         ;;
 esac
 

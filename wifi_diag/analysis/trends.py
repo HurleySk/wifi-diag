@@ -21,6 +21,7 @@ def weekly_comparison(store, host=None, weeks=4):
             "avg_rssi": None,
             "avg_download": None,
             "band_5ghz_pct": None,
+            "download_interfaces": (),
         }
 
         if readings:
@@ -32,9 +33,15 @@ def weekly_comparison(store, host=None, weeks=4):
             week_data["band_5ghz_pct"] = round(fives / len(readings) * 100, 1)
 
         if speeds:
-            dls = [s["download_mbps"] for s in speeds if s["download_mbps"] is not None]
-            if dls:
-                week_data["avg_download"] = round(sum(dls) / len(dls), 1)
+            measured = [s for s in speeds if s["download_mbps"] is not None]
+            if measured:
+                week_data["avg_download"] = round(
+                    sum(s["download_mbps"] for s in measured) / len(measured), 1
+                )
+                # Lets callers refuse to compare an ethernet week to a WiFi one.
+                week_data["download_interfaces"] = tuple(sorted(
+                    {s.get("interface") or "unknown" for s in measured}
+                ))
 
         result["weeks"].append(week_data)
 

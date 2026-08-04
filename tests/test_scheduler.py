@@ -63,8 +63,7 @@ class TestCastCollection:
 
     def test_device_that_changed_ip_keeps_one_identity(self, sched, store):
         """A DHCP lease change must not create a second device record."""
-        # Seed the registry with a stale IP for the device the mock will
-        # report at 192.168.1.157.
+        # Seed a stale IP for the device the mock reports at 192.168.1.157.
         store.upsert_cast_device({
             "mac": "cc:f4:11:a2:d3:af", "name": "Sam's Pod", "model": None,
             "firmware": None, "last_ip": "192.168.1.99",

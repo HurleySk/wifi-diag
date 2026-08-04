@@ -194,7 +194,9 @@ almost always the wire. Left alone, latency and speed readings describe the
 cable, not the WiFi link, and nothing in the numbers reveals it.
 
 The agent pins its probes to the interface named by `WIFI_INTERFACE` in
-`wifi_diag/config.py`:
+`wifi_diag/config.py`, which defaults to `wlan0` and can be overridden with the
+`WIFI_DIAG_INTERFACE` environment variable. `install.sh` reads the same
+variable and writes it into the systemd unit.
 
 - **Latency** uses `ping -I <device>`, which sets `SO_BINDTODEVICE` and forces
   egress. This works with no additional setup.
@@ -203,6 +205,14 @@ The agent pins its probes to the interface named by `WIFI_INTERFACE` in
   per-interface byte counters and **discards the reading** if the traffic left
   over a different interface. A missing reading is recoverable; a wrong one
   that reads as a healthy WiFi link is not.
+- **Cast reachability** binds its HTTP probe to the WiFi address, so a device
+  that is unreachable over WiFi is not recorded as up because the wire
+  answered for it.
+
+Latency and speed rows record the interface they were measured on. Rows written
+before this existed have `interface` NULL, meaning unknown provenance, and
+`diagnose` refuses to compare a window of one interface against another rather
+than reporting the difference as a change in the network.
 
 To make speed readings work on such a host, `install.sh` adds a NetworkManager
 dispatcher script that keeps a policy rule routing traffic sourced from the
@@ -221,7 +231,8 @@ To remove the dispatcher later:
 
 ```bash
 sudo rm /etc/NetworkManager/dispatcher.d/90-wifi-diag-srcroute
-while sudo ip rule del table 200 2>/dev/null; do :; done
+while sudo ip rule del pref 20200 table 200 2>/dev/null; do :; done
+sudo ip route flush table 200
 ```
 
 ## Managing the Service (Pi)

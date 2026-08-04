@@ -16,11 +16,7 @@ class ScanLinuxCollector(BaseCollector):
         return self._try_iw()
 
     def _try_nmcli(self):
-        # A forced rescan matters: NetworkManager's cached list can contain
-        # only the currently associated BSSID, which would leave the other
-        # radio permanently unmapped and every device on it band-unknown.
-        # Requesting a scan needs authorization, so fall back to the cache
-        # when it is refused.
+        # Force a rescan: the cache may hold only the associated BSSID.
         rows = self._nmcli(rescan=True)
         if rows:
             return rows

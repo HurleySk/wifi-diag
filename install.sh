@@ -17,11 +17,7 @@ pip3 install speedtest-cli --break-system-packages 2>/dev/null || pip3 install s
 CURRENT_USER="$(whoami)"
 INSTALL_DIR="$(pwd)"
 
-# pip user-installs the console script to ~/.local/bin, which is NOT on PATH
-# for non-interactive shells. That breaks remote invocation over SSH
-# (`ssh pi@host wifi-diag devices`), since such shells source neither
-# .profile nor the interactive part of .bashrc. Symlink into /usr/local/bin
-# so the command resolves regardless of how the shell was started.
+# ~/.local/bin is off PATH for non-interactive shells, breaking ssh invocation.
 WIFI_DIAG_BIN="$(command -v wifi-diag || true)"
 if [ -z "$WIFI_DIAG_BIN" ]; then
     for candidate in "$HOME/.local/bin/wifi-diag" /usr/local/bin/wifi-diag /usr/bin/wifi-diag; do
@@ -39,12 +35,7 @@ elif [ -z "$WIFI_DIAG_BIN" ]; then
     echo "Warning: wifi-diag console script not found; use 'python3 -m wifi_diag' instead."
 fi
 
-# A host with a second route to the internet sends every probe out whichever
-# interface has the lower route metric, normally the wired one. Latency probes
-# are pinned with `ping -I <device>`, which forces egress on its own, but the
-# speed test can only bind a source address, and that does not choose a route.
-# Without the policy rule below, the speed collector detects the mismatch and
-# discards the reading rather than storing a number that describes the wire.
+# Speed tests can only bind a source address, which does not choose a route.
 WIFI_IF="${WIFI_DIAG_INTERFACE:-wlan0}"
 DISPATCH_DIR=/etc/NetworkManager/dispatcher.d
 
@@ -72,10 +63,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$CURRENT_USER
-# systemd gives units a minimal PATH that excludes ~/.local/bin, where pip
-# user-installs console scripts. Without this, speedtest-cli is not found and
-# speed collection silently fails for the life of the service.
+# systemd's minimal PATH omits ~/.local/bin, where pip puts speedtest-cli.
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin"
+# Without this stdout is block-buffered off a tty and the journal stays empty.
+Environment="PYTHONUNBUFFERED=1"
+Environment="WIFI_DIAG_INTERFACE=$WIFI_IF"
 ExecStart=/usr/bin/python3 -m wifi_diag collect
 WorkingDirectory=$INSTALL_DIR
 Restart=on-failure
@@ -88,9 +80,7 @@ UNIT
 echo "Enabling and starting service..."
 sudo systemctl daemon-reload
 sudo systemctl enable wifi-diag
-# restart, not start: on a re-install the service is usually already running,
-# and 'start' is a no-op that would leave the old process alive with the old
-# unit's environment and the old code.
+# restart, not start: 'start' is a no-op on an already-running old process.
 sudo systemctl restart wifi-diag
 
 echo ""

@@ -1,8 +1,7 @@
 import re
 from . import channel_to_freq, freq_to_band, freq_to_channel
 
-# nmcli terse output escapes field-internal colons as "\:". Split only on
-# colons that are not preceded by a backslash.
+# nmcli escapes field-internal colons as "\:"; split on unescaped ones only.
 _NMCLI_SPLIT = re.compile(r"(?<!\\):")
 
 
@@ -12,9 +11,7 @@ def _row(bssid, ssid, frequency_mhz, channel, band):
         "ssid": ssid,
         "frequency_mhz": frequency_mhz,
         "channel": channel,
-        # An unclassifiable frequency is stored as NULL, not as the string
-        # "unknown": a non-null band is treated as known everywhere downstream
-        # and would otherwise produce band_switch events against "unknown".
+        # NULL, not "unknown": a non-null band reads as known downstream.
         "band": None if band == "unknown" else band,
     }
 

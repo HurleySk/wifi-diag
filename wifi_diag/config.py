@@ -1,3 +1,4 @@
+import os
 import socket
 from pathlib import Path
 
@@ -22,4 +23,5 @@ CAST_HTTP_TIMEOUT_SECS = 3
 CAST_PING_COUNT = 3
 CAST_STATIC_IPS = []
 DISCOVERY_TIMEOUT_SECS = 5
-WIFI_INTERFACE = "wlan0"
+# Overridable so a host naming its WiFi device otherwise needs no code edit.
+WIFI_INTERFACE = os.environ.get("WIFI_DIAG_INTERFACE", "wlan0")

@@ -230,9 +230,7 @@ class TestCastStore:
         import sqlite3
         db = tmp_path / "old.db"
         conn = sqlite3.connect(str(db))
-        # The pre-feature wifi_readings schema, verbatim. It must be the real
-        # column list: _create_tables() also creates an index on
-        # (host, timestamp), which errors against a stub table.
+        # The real pre-feature column list: the index errors against a stub.
         conn.execute(
             """CREATE TABLE wifi_readings (
                    id INTEGER PRIMARY KEY,

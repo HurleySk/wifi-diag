@@ -66,7 +66,15 @@ def diagnose(store, days=7):
                     f"over {len(weeks_with_data)} weeks."
                 )
         if first["avg_download"] is not None and last["avg_download"] is not None:
-            if last["avg_download"] < first["avg_download"] * 0.8:
+            # A speed change across an interface change measures the change.
+            if first["download_interfaces"] != last["download_interfaces"]:
+                findings.append(
+                    f"ℹ Download speeds are not comparable across this window: "
+                    f"the earlier readings came from "
+                    f"{'/'.join(first['download_interfaces'])} and the later "
+                    f"ones from {'/'.join(last['download_interfaces'])}."
+                )
+            elif last["avg_download"] < first["avg_download"] * 0.8:
                 findings.append(
                     f"⚠ Download speed declining: "
                     f"{first['avg_download']:.0f} → {last['avg_download']:.0f} Mbps."
@@ -76,24 +84,28 @@ def diagnose(store, days=7):
         gw = store.get_latency_readings(host=h, target=config.GATEWAY_TARGET, start=start)
         ext = store.get_latency_readings(host=h, target=config.EXTERNAL_TARGET, start=start)
         if gw and ext:
-            gw_valid = [r["rtt_avg_ms"] for r in gw if r["rtt_avg_ms"]]
-            ext_valid = [r["rtt_avg_ms"] for r in ext if r["rtt_avg_ms"]]
-            if not gw_valid or not ext_valid:
-                continue
-            gw_avg = sum(gw_valid) / len(gw_valid)
-            ext_avg = sum(ext_valid) / len(ext_valid)
-            if ext_avg > gw_avg * 5:
-                findings.append(
-                    f"⚠ {h}: gateway latency {gw_avg:.0f}ms vs external {ext_avg:.0f}ms - "
-                    f"bottleneck is likely upstream (5G backhaul), not local WiFi."
-                )
-            elif gw_avg > 20:
-                findings.append(
-                    f"⚠ {h}: gateway latency {gw_avg:.0f}ms is high - "
-                    f"local WiFi congestion or interference likely."
-                )
+            # An RTT of 0.0 is a real reading, so test for None rather than truth.
+            gw_valid = [r["rtt_avg_ms"] for r in gw if r["rtt_avg_ms"] is not None]
+            ext_valid = [r["rtt_avg_ms"] for r in ext if r["rtt_avg_ms"] is not None]
+            if gw_valid and ext_valid:
+                gw_avg = sum(gw_valid) / len(gw_valid)
+                ext_avg = sum(ext_valid) / len(ext_valid)
+                if ext_avg > gw_avg * 5:
+                    findings.append(
+                        f"⚠ {h}: gateway latency {gw_avg:.0f}ms vs external {ext_avg:.0f}ms - "
+                        f"bottleneck is likely upstream (5G backhaul), not local WiFi."
+                    )
+                elif gw_avg > 20:
+                    findings.append(
+                        f"⚠ {h}: gateway latency {gw_avg:.0f}ms is high - "
+                        f"local WiFi congestion or interference likely."
+                    )
 
-        gw_loss = [r for r in gw if r["packet_loss_pct"] and r["packet_loss_pct"] > 0]
+        # Runs even when no RTT parsed: total loss is when this matters most.
+        gw_loss = [
+            r for r in gw
+            if r["packet_loss_pct"] is not None and r["packet_loss_pct"] > 0
+        ]
         if gw_loss:
             pct = len(gw_loss) / len(gw) * 100
             findings.append(

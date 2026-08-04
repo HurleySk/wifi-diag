@@ -5,6 +5,14 @@ from ..netiface import busiest_interface, interface_ip, rx_byte_counters
 from ..parsers.speedtest_parser import parse_speedtest
 
 
+# A run takes 30-60s; the ceiling stops a wedged one stalling the whole loop.
+SPEEDTEST_TIMEOUT_SECS = 180
+
+
+class SpeedTestError(RuntimeError):
+    """speedtest-cli did not produce a usable measurement."""
+
+
 class WrongInterfaceError(RuntimeError):
     """A speed test completed, but its traffic left over the wrong interface."""
 
@@ -19,16 +27,34 @@ class SpeedCollector(BaseCollector):
         if source:
             cmd += ["--source", source]
 
-        # --source only binds the source address; the kernel still picks the
-        # route. Bracket the run with byte counters so a test that escaped
-        # over another interface is discarded rather than stored as though it
-        # measured this one. A wrong number here is worse than no number: it
-        # reads as a healthy WiFi link that was never tested.
+        # --source binds an address but does not pick a route, so verify after.
         before = rx_byte_counters() if self.interface else {}
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=SPEEDTEST_TIMEOUT_SECS
+            )
+        except subprocess.TimeoutExpired as e:
+            raise SpeedTestError(
+                f"speedtest-cli did not finish within {SPEEDTEST_TIMEOUT_SECS}s"
+            ) from e
+        except OSError as e:
+            raise SpeedTestError(f"could not run speedtest-cli: {e}") from e
         after = rx_byte_counters() if self.interface else {}
 
+        # First: a failure prints nothing, and everything below misreads that.
+        if result.returncode != 0:
+            detail = (result.stderr or "").strip().splitlines()
+            raise SpeedTestError(
+                f"speedtest-cli exited {result.returncode}: "
+                f"{detail[-1] if detail else 'no error output'}"
+            )
+
         reading = parse_speedtest(result.stdout)
+        if reading["download_mbps"] is None and reading["upload_mbps"] is None:
+            raise SpeedTestError(
+                "speedtest-cli exited cleanly but reported neither download "
+                f"nor upload speed; its output was {result.stdout.strip()!r}"
+            )
 
         if self.interface and before and after:
             carried = busiest_interface(before, after)

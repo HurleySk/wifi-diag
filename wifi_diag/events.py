@@ -20,9 +20,7 @@ def detect_cast_events(prev, curr):
     elif not was_reachable and is_reachable:
         events.append(_event("online", {}))
 
-    # Only compare association state when the device was reachable on both
-    # samples. An unreachable device reports no BSSID, which would otherwise
-    # look identical to a genuine switch.
+    # An unreachable device reports no BSSID, which mimics a genuine switch.
     if was_reachable and is_reachable:
         events.extend(_association_events(prev, curr))
 
@@ -40,8 +38,7 @@ def _association_events(prev, curr):
     prev_bssid = prev.get("bssid")
     curr_bssid = curr.get("bssid")
 
-    # A BSSID we never learned (empty string from some firmware, stored as
-    # None) is unknown, not a distinct value. Never treat it as a transition.
+    # An unknown BSSID is not a distinct value, so it is never a transition.
     if not prev_bssid or not curr_bssid or prev_bssid == curr_bssid:
         return []
 

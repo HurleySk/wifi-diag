@@ -57,21 +57,54 @@ class TestCli:
         with pytest.raises(SystemExit):
             main([])
 
-    def test_collect_dry_run_exits_cleanly(self, seeded_db):
-        import threading, time
-        stop = threading.Event()
+    def test_collect_dry_run_collects_and_stops(self, seeded_db, monkeypatch):
+        import threading
+        import time
+
+        from wifi_diag.scheduler import DiagScheduler
+
+        # This asserted nothing before, and passed while its thread died.
+        created = {}
+        real_init = DiagScheduler.__init__
+
+        def capture(self, store, dry_run=False):
+            real_init(self, store, dry_run)
+            created["scheduler"] = self
+
+        monkeypatch.setattr(DiagScheduler, "__init__", capture)
+
+        error = {}
 
         def run_collect():
             try:
                 main(["collect", "--dry-run", "--db", seeded_db])
             except SystemExit:
                 pass
+            except BaseException as e:
+                error["raised"] = e
 
-        t = threading.Thread(target=run_collect, daemon=True)
-        t.start()
-        time.sleep(0.5)
-        import signal, os
-        # Just verify it started without error - thread is daemon so it dies with test
+        def wifi_count():
+            # Unfiltered: collect writes under this machine's hostname.
+            store = DiagStore(seeded_db)
+            try:
+                return len(store.get_wifi_readings())
+            finally:
+                store.close()
+
+        before = wifi_count()
+        thread = threading.Thread(target=run_collect, daemon=True)
+        thread.start()
+
+        deadline = time.time() + 10
+        while time.time() < deadline and wifi_count() == before:
+            assert "raised" not in error, f"collect raised {error.get('raised')!r}"
+            time.sleep(0.05)
+
+        assert wifi_count() > before, "collect wrote no readings"
+        created["scheduler"].stop()
+        thread.join(timeout=10)
+        assert not thread.is_alive(), "collect did not stop when asked"
+        assert "raised" not in error, f"collect raised {error.get('raised')!r}"
 
 
 class TestDeviceCommands:
