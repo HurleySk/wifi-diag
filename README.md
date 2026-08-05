@@ -178,12 +178,12 @@ been seen in a scan shows a band of `?` rather than a guess.
 - **Some devices report no BSSID at all.** Older firmware returns an empty
   value, so band is shown as `?` for those. Reachability, latency, and reboot
   detection still work.
-- **Some devices report no MAC either.** Cast firmware in the 1.68 series
-  returns `00:00:00:00:00:00`, which every such device shares. Identity falls
-  back to the `ssdp_udn`, so those devices stay distinct. A device that reports
-  a real MAC is still keyed on it, which keeps its history continuous - but one
-  that stops reporting a MAC across a firmware update gets a new identity, and
-  its earlier history stays under the old one.
+- **A device can stop reporting its MAC.** Cast firmware in the 1.68 series
+  intermittently returns `00:00:00:00:00:00` - seen around a reboot - and every
+  device doing so at once reports the same value. Identity therefore comes from
+  the `ssdp_udn`, which is unique and stable, and a device whose UDN is already
+  tied to an identity keeps it when its MAC blanks out. Devices are keyed on a
+  real MAC where one has been reported, so existing history is unaffected.
 - **Re-associations are not directly visible.** A device that drops and
   instantly rejoins without rebooting is only detected if it misses a poll or
   lands on a different BSSID.

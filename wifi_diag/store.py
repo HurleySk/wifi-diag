@@ -75,6 +75,7 @@ class DiagStore:
             CREATE TABLE IF NOT EXISTS cast_devices (
                 device_id TEXT PRIMARY KEY,
                 mac TEXT,
+                udn TEXT,
                 name TEXT,
                 model TEXT,
                 firmware TEXT,
@@ -208,6 +209,7 @@ class DiagStore:
                 CREATE TABLE cast_devices_new (
                     device_id TEXT PRIMARY KEY,
                     mac TEXT,
+                    udn TEXT,
                     name TEXT,
                     model TEXT,
                     firmware TEXT,
@@ -216,12 +218,16 @@ class DiagStore:
                     last_ip TEXT
                 );
                 INSERT OR REPLACE INTO cast_devices_new
-                    SELECT {derived}, {real_mac}, name, model, firmware,
+                    SELECT {derived}, {real_mac}, NULL, name, model, firmware,
                            first_seen, last_seen, last_ip
                     FROM cast_devices;
                 DROP TABLE cast_devices;
                 ALTER TABLE cast_devices_new RENAME TO cast_devices;
             """)
+
+        # Databases re-keyed before the UDN was recorded still lack the column.
+        if "udn" not in self._columns("cast_devices"):
+            self.conn.execute("ALTER TABLE cast_devices ADD COLUMN udn TEXT")
 
         # Indexed here rather than in _create_tables: on a pre-existing database
         # the column does not exist until the rebuilds above have run.
@@ -343,13 +349,16 @@ class DiagStore:
     def upsert_cast_device(self, device):
         params = dict(device)
         params.setdefault("mac", None)
+        params.setdefault("udn", None)
         self.conn.execute(
             """INSERT INTO cast_devices
-               (device_id, mac, name, model, firmware, first_seen, last_seen, last_ip)
-               VALUES (:device_id, :mac, :name, :model, :firmware, :timestamp,
-                :timestamp, :last_ip)
+               (device_id, mac, udn, name, model, firmware, first_seen,
+                last_seen, last_ip)
+               VALUES (:device_id, :mac, :udn, :name, :model, :firmware,
+                :timestamp, :timestamp, :last_ip)
                ON CONFLICT(device_id) DO UPDATE SET
                  mac = COALESCE(excluded.mac, cast_devices.mac),
+                 udn = COALESCE(excluded.udn, cast_devices.udn),
                  name = COALESCE(excluded.name, cast_devices.name),
                  model = COALESCE(excluded.model, cast_devices.model),
                  firmware = COALESCE(excluded.firmware, cast_devices.firmware),

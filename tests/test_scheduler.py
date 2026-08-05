@@ -235,3 +235,56 @@ class TestSharedIdentity:
                    if e["event_type"] == "identity_clash"]
         assert len(clashes) == 1
         assert "192.168.1.163" in clashes[0]["detail"]
+
+
+class TestTransientMacLoss:
+    """A Cast device can blank its MAC for a while and then report it again."""
+
+    def _info(self, mac, udn, ip, name):
+        return {
+            "device_id": mac or f"udn:{udn}", "mac": mac, "udn": udn,
+            "name": name, "ip": ip, "ssid": "BisNet",
+            "bssid": "78:67:0e:6f:a7:fd", "ethernet": False,
+            "uptime_secs": 100.0, "firmware": "1.68.cast",
+        }
+
+    def test_identity_survives_the_mac_blanking_out(self, sched, store):
+        real = self._info("cc:f4:11:cc:d2:e8", "udn-kitchen", "192.168.1.161", "Kitchen Pod")
+        blank = self._info(None, "udn-kitchen", "192.168.1.161", "Kitchen Pod")
+
+        sched.cast_collector = FakeCastCollector({"192.168.1.161": real})
+        sched._collect_cast()
+        sched.cast_collector = FakeCastCollector({"192.168.1.161": blank})
+        sched._collect_cast()
+        sched.cast_collector = FakeCastCollector({"192.168.1.161": real})
+        sched._collect_cast()
+
+        ids = {r["device_id"] for r in store.get_cast_readings()}
+        assert ids == {"cc:f4:11:cc:d2:e8"}
+        assert len(store.get_cast_readings()) == 3
+
+    def test_blanked_mac_does_not_merge_two_devices(self, sched, store):
+        """The UDN still separates devices that have never reported a MAC."""
+        sched.cast_collector = FakeCastCollector({
+            "192.168.1.161": self._info(None, "udn-kitchen", "192.168.1.161", "Kitchen Pod"),
+            "192.168.1.163": self._info(None, "udn-tv", "192.168.1.163", "BigBoiTV"),
+        })
+        sched._collect_cast()
+
+        ids = {r["device_id"] for r in store.get_cast_readings()}
+        assert ids == {"udn:udn-kitchen", "udn:udn-tv"}
+
+    def test_udn_mapping_is_reloaded_from_the_registry(self, sched, store):
+        """A restart must not fork the identity of a device mid-blackout."""
+        store.upsert_cast_device({
+            "device_id": "cc:f4:11:cc:d2:e8", "mac": "cc:f4:11:cc:d2:e8",
+            "udn": "udn-kitchen", "name": "Kitchen Pod", "model": None,
+            "firmware": None, "last_ip": "192.168.1.161",
+            "timestamp": "2026-08-01T00:00:00+00:00",
+        })
+        sched.cast_collector = FakeCastCollector({
+            "192.168.1.161": self._info(None, "udn-kitchen", "192.168.1.161", "Kitchen Pod"),
+        })
+        sched._collect_cast()
+
+        assert [r["device_id"] for r in store.get_cast_readings()] == ["cc:f4:11:cc:d2:e8"]

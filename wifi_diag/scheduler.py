@@ -48,6 +48,8 @@ class DiagScheduler:
         self._targets = {}
         # device_id -> last reading dict, for event detection
         self._last_cast = {}
+        # udn -> device_id, so a device that blanks its MAC keeps its identity
+        self._udn_to_id = {}
 
     def run(self):
         self.running = True
@@ -184,6 +186,8 @@ class DiagScheduler:
     def _refresh_targets(self):
         """Merge the persisted registry, mDNS results, and static IPs."""
         for d in self.store.get_cast_devices():
+            if d["udn"]:
+                self._udn_to_id.setdefault(d["udn"], d["device_id"])
             if d["last_ip"]:
                 entry = self._targets.setdefault(d["device_id"], {})
                 entry.setdefault("ip", d["last_ip"])
@@ -235,7 +239,7 @@ class DiagScheduler:
             info = None
 
         if info is not None:
-            device_id = info["device_id"]
+            device_id = self._resolve_identity(info)
             name = info.get("name") or known_name
             if known_id and known_id != device_id:
                 # The address moved: a stale mapping makes both devices report bogus state.
@@ -289,6 +293,7 @@ class DiagScheduler:
             self.store.upsert_cast_device({
                 "device_id": device_id,
                 "mac": info.get("mac") if info else None,
+                "udn": info.get("udn") if info else None,
                 "name": name,
                 "model": model,
                 "firmware": info.get("firmware") if info else None,
@@ -301,6 +306,8 @@ class DiagScheduler:
 
         seen.add(device_id)
         self._targets[device_id] = {"ip": ip, "name": name, "model": model}
+        if info and info.get("udn"):
+            self._udn_to_id[info["udn"]] = device_id
 
         prev = self._last_cast.get(device_id)
         for event in detect_cast_events(prev, reading):
@@ -314,6 +321,19 @@ class DiagScheduler:
             remembered = dict(reading)
             remembered["uptime_secs"] = prev.get("uptime_secs")
         self._last_cast[device_id] = remembered
+
+    def _resolve_identity(self, info):
+        """The identity this device is already known by, or a new one.
+
+        A Cast device can report an all-zero MAC transiently - seen around a
+        reboot - and go back to reporting a real one. Keying purely on what
+        arrived would fork one device's history in two, so a device whose UDN
+        is already tied to an identity keeps it.
+        """
+        udn = info.get("udn")
+        if udn and not info.get("mac"):
+            return self._udn_to_id.get(udn, info["device_id"])
+        return info["device_id"]
 
     def _store_cast_event(self, device_id, name, event_type, detail, ts):
         try:
