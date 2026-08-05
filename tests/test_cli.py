@@ -29,6 +29,23 @@ def _seed_store(store):
     })
 
 
+class TestRttFormatting:
+    def test_a_real_reading_is_shown_as_an_average(self):
+        from wifi_diag.cli import _rtt
+
+        assert _rtt(4.2) == "4.2ms avg"
+
+    def test_zero_is_a_reading_not_an_absence(self):
+        from wifi_diag.cli import _rtt
+
+        assert _rtt(0.0) == "0.0ms avg"
+
+    def test_total_loss_has_no_average_to_report(self):
+        from wifi_diag.cli import _rtt
+
+        assert _rtt(None) == "no reply"
+
+
 class TestCli:
     @pytest.fixture
     def seeded_db(self, tmp_path):

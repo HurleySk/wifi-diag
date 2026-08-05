@@ -155,6 +155,38 @@ class TestDeviceSummary:
         assert device_summary(s, days=7)["devices"] == {}
         s.close()
 
+    def test_identity_clashes_are_counted(self):
+        from wifi_diag.analysis.devices import device_summary
+
+        s = self._store_with_data()
+        s.insert_cast_event({
+            "timestamp": "2026-08-02T10:00:00+00:00", "host": "testpi",
+            "device_id": "cc:f4:11:a2:d3:af", "name": "Sam's Pod",
+            "event_type": "identity_clash", "detail": "{}",
+        })
+        d = device_summary(s, days=3650)["devices"]["cc:f4:11:a2:d3:af"]
+        assert d["identity_clashes"] == 1
+        s.close()
+
+    def test_a_device_whose_every_reading_clashed_still_appears(self):
+        """No readings is not the same as absent; its readings were discarded."""
+        from wifi_diag.analysis.devices import device_summary
+        from wifi_diag.store import DiagStore
+
+        s = DiagStore(":memory:")
+        s.insert_cast_event({
+            "timestamp": "2026-08-02T10:00:00+00:00", "host": "testpi",
+            "device_id": "udn:ghost", "name": "BigBoiTV",
+            "event_type": "identity_clash", "detail": "{}",
+        })
+        d = device_summary(s, days=3650)["devices"]["udn:ghost"]
+        assert d["name"] == "BigBoiTV"
+        assert d["total"] == 0
+        assert d["identity_clashes"] == 1
+        assert d["last_ip"] is None
+        assert d["last_seen"] == "2026-08-02T10:00:00+00:00"
+        s.close()
+
     def test_device_with_no_known_band_has_none_dominant(self):
         from wifi_diag.analysis.devices import device_summary
         from wifi_diag.store import DiagStore
@@ -217,6 +249,34 @@ class TestDiagnoseCastSection:
         s = self._store_with_flapping_device()
         out = diagnose(s, days=3650)
         assert "band switches" in out
+        s.close()
+
+    def test_diagnose_reports_identity_clashes(self):
+        from wifi_diag.analysis.diagnose import diagnose
+
+        s = self._store_with_flapping_device()
+        s.insert_cast_event({
+            "timestamp": "2026-08-01T10:00:00+00:00", "host": "testpi",
+            "device_id": "cc:f4:11:a2:d3:af", "name": "Kitchen Pod",
+            "event_type": "identity_clash", "detail": "{}",
+        })
+        out = diagnose(s, days=3650)
+        assert "claimed the same identity" in out
+        s.close()
+
+    def test_diagnose_does_not_call_a_clash_only_device_unreachable(self):
+        """0% reachable would be a measurement; nothing was ever measured."""
+        from wifi_diag.analysis.diagnose import diagnose
+
+        s = self._store_with_flapping_device()
+        s.insert_cast_event({
+            "timestamp": "2026-08-01T10:00:00+00:00", "host": "testpi",
+            "device_id": "udn:ghost", "name": "BigBoiTV",
+            "event_type": "identity_clash", "detail": "{}",
+        })
+        out = diagnose(s, days=3650)
+        assert "BigBoiTV: no readings stored" in out
+        assert "BigBoiTV was unreachable" not in out
         s.close()
 
     def test_diagnose_without_cast_data_is_unchanged(self):

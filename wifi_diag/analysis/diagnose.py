@@ -119,6 +119,9 @@ def diagnose(store, days=7):
         lines.append(f"Cast devices ({len(cast)}):")
         for device_id, d in sorted(cast.items(), key=lambda kv: (kv[1]["name"] or kv[0])):
             band = d["dominant_band"] or "band unknown"
+            if not d["total"]:
+                lines.append(f"  {d['name'] or device_id}: no readings stored")
+                continue
             lines.append(
                 f"  {d['name'] or device_id}: {d['reachable_pct']:.0f}% reachable, "
                 f"{band}, {d['band_switches']} band switches, {d['reboots']} reboots"
@@ -126,7 +129,13 @@ def diagnose(store, days=7):
 
         for device_id, d in cast.items():
             label = d["name"] or device_id
-            if d["reachable_pct"] < 95:
+            if d["identity_clashes"]:
+                findings.append(
+                    f"⚠ {label}: {d['identity_clashes']} readings were discarded "
+                    f"because another address claimed the same identity in the "
+                    f"same cycle - two devices are answering as one."
+                )
+            if d["total"] and d["reachable_pct"] < 95:
                 findings.append(
                     f"⚠ {label} was unreachable in {100 - d['reachable_pct']:.0f}% of "
                     f"polls - it is dropping off the network, not just responding slowly."

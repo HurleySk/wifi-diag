@@ -185,7 +185,14 @@ class DiagScheduler:
 
     def _refresh_targets(self):
         """Merge the persisted registry, mDNS results, and static IPs."""
-        for d in self.store.get_cast_devices():
+        # MAC-backed rows first, then by device_id: the registry is read back in
+        # name order, so a UDN claimed by two rows would otherwise resolve to
+        # whichever sorted first and the identity would flip between restarts.
+        registry = sorted(
+            self.store.get_cast_devices(),
+            key=lambda d: (d["mac"] is None, d["device_id"]),
+        )
+        for d in registry:
             if d["udn"]:
                 self._udn_to_id.setdefault(d["udn"], d["device_id"])
             if d["last_ip"]:
@@ -254,7 +261,7 @@ class DiagScheduler:
         if device_id in seen:
             # Two addresses claiming one identity: a reading would overwrite the
             # other device's. Record it rather than let the loser vanish silently.
-            self._record_identity_clash(device_id, ip, name, ts)
+            self._record_identity_clash(device_id, known_id, ip, name, ts)
             return
 
         latency = {}
@@ -327,12 +334,14 @@ class DiagScheduler:
 
         A Cast device can report an all-zero MAC transiently - seen around a
         reboot - and go back to reporting a real one. Keying purely on what
-        arrived would fork one device's history in two, so a device whose UDN
-        is already tied to an identity keeps it.
+        arrived would fork one device's history in two, so the UDN decides
+        whenever it is already tied to an identity. That has to hold in both
+        directions: a device first seen without a MAC is keyed by UDN, and
+        honouring the MAC the moment it reappears would fork it just the same.
         """
         udn = info.get("udn")
-        if udn and not info.get("mac"):
-            return self._udn_to_id.get(udn, info["device_id"])
+        if udn and udn in self._udn_to_id:
+            return self._udn_to_id[udn]
         return info["device_id"]
 
     def _store_cast_event(self, device_id, name, event_type, detail, ts):
@@ -348,19 +357,18 @@ class DiagScheduler:
         except Exception as e:
             print(f"  Cast event store error: {e}")
 
-    def _record_identity_clash(self, device_id, ip, name, ts):
+    def _record_identity_clash(self, device_id, suppressed_id, ip, name, ts):
         label = name or device_id
         print(
             f"  {label} at {ip} reports an identity already claimed this cycle "
             f"({device_id}); no reading stored for it."
         )
-        self._store_cast_event(
-            device_id,
-            name,
-            "identity_clash",
-            json.dumps({"ip": ip, "device_id": device_id}),
-            ts,
-        )
+        # device_id is already a column on the event; what it cannot say is
+        # which registry entry lost its reading, which is the thing to chase.
+        detail = {"ip": ip}
+        if suppressed_id and suppressed_id != device_id:
+            detail["suppressed_id"] = suppressed_id
+        self._store_cast_event(device_id, name, "identity_clash", json.dumps(detail), ts)
 
     def _handle_stop(self, signum, frame):
         self.stop()

@@ -3,8 +3,14 @@ from pathlib import Path
 from . import config
 from .parsers.eureka_parser import PLACEHOLDER_MACS
 
-# Rendered into migration SQL, so the order must not vary between runs.
-_PLACEHOLDER_MACS = tuple(sorted(PLACEHOLDER_MACS))
+def _sql_str_list(values):
+    return ", ".join("'" + v.replace("'", "''") + "'" for v in values)
+
+
+# Rendered into migration SQL, so the order must not vary between runs. Built as
+# an explicit list rather than a Python tuple repr, which emits a trailing comma
+# for a single element and would not parse as SQL.
+_PLACEHOLDER_MACS = _sql_str_list(sorted(PLACEHOLDER_MACS))
 
 
 class DiagStore:
@@ -148,16 +154,24 @@ class DiagStore:
         cannot rejoin them to the UDN identity the same devices now report.
         """
         legacy = "'unidentified:' || COALESCE(LOWER(NULLIF(name, '')), mac)"
+        # LOWER, because IN compares with BINARY collation and firmware that
+        # reported FF:FF:FF:FF:FF:FF would otherwise survive as a device_id.
+        placeholder = f"LOWER(mac) IN ({_PLACEHOLDER_MACS})"
         derived = (
-            f"CASE WHEN mac IS NULL OR mac IN {_PLACEHOLDER_MACS} "
+            f"CASE WHEN mac IS NULL OR {placeholder} "
             f"THEN {legacy} ELSE mac END"
         )
         # The old column was NOT NULL, so a placeholder cannot be nulled in
         # place; each table is rebuilt rather than altered.
-        real_mac = f"CASE WHEN mac IN {_PLACEHOLDER_MACS} THEN NULL ELSE mac END"
+        real_mac = f"CASE WHEN {placeholder} THEN NULL ELSE mac END"
 
+        # Each rebuild is wrapped in an explicit transaction: executescript runs
+        # in autocommit, so a crash between DROP and RENAME would leave the data
+        # in an orphan _new table while the resume guard below - which only asks
+        # whether device_id exists - skipped the migration from then on.
         if "device_id" not in self._columns("cast_readings"):
             self.conn.executescript(f"""
+                BEGIN;
                 CREATE TABLE cast_readings_new (
                     id INTEGER PRIMARY KEY,
                     timestamp TEXT NOT NULL,
@@ -184,10 +198,12 @@ class DiagStore:
                     FROM cast_readings;
                 DROP TABLE cast_readings;
                 ALTER TABLE cast_readings_new RENAME TO cast_readings;
+                COMMIT;
             """)
 
         if "device_id" not in self._columns("cast_events"):
             self.conn.executescript(f"""
+                BEGIN;
                 CREATE TABLE cast_events_new (
                     id INTEGER PRIMARY KEY,
                     timestamp TEXT NOT NULL,
@@ -202,10 +218,12 @@ class DiagStore:
                     FROM cast_events;
                 DROP TABLE cast_events;
                 ALTER TABLE cast_events_new RENAME TO cast_events;
+                COMMIT;
             """)
 
         if "device_id" not in self._columns("cast_devices"):
             self.conn.executescript(f"""
+                BEGIN;
                 CREATE TABLE cast_devices_new (
                     device_id TEXT PRIMARY KEY,
                     mac TEXT,
@@ -223,11 +241,14 @@ class DiagStore:
                     FROM cast_devices;
                 DROP TABLE cast_devices;
                 ALTER TABLE cast_devices_new RENAME TO cast_devices;
+                COMMIT;
             """)
 
         # Databases re-keyed before the UDN was recorded still lack the column.
         if "udn" not in self._columns("cast_devices"):
             self.conn.execute("ALTER TABLE cast_devices ADD COLUMN udn TEXT")
+
+        self._strip_unprobeable_addresses()
 
         # Indexed here rather than in _create_tables: on a pre-existing database
         # the column does not exist until the rebuilds above have run.
@@ -238,6 +259,12 @@ class DiagStore:
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_cast_event_device_ts"
             " ON cast_events(device_id, timestamp)"
+        )
+
+    def _strip_unprobeable_addresses(self):
+        self.conn.execute(
+            "UPDATE cast_devices SET last_ip = NULL"
+            " WHERE last_ip IS NOT NULL AND device_id LIKE 'unidentified:%'"
         )
 
     def _query(self, table, host=None, target=None, device_id=None, start=None, end=None):

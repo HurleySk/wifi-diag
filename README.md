@@ -182,8 +182,15 @@ been seen in a scan shows a band of `?` rather than a guess.
   intermittently returns `00:00:00:00:00:00` - seen around a reboot - and every
   device doing so at once reports the same value. Identity therefore comes from
   the `ssdp_udn`, which is unique and stable, and a device whose UDN is already
-  tied to an identity keeps it when its MAC blanks out. Devices are keyed on a
-  real MAC where one has been reported, so existing history is unaffected.
+  tied to an identity keeps that identity for good - both when its MAC blanks
+  out and when the MAC comes back, since honouring the returning MAC would fork
+  the history just as surely. Devices first seen with a real MAC are keyed on
+  it, so existing history is unaffected.
+- **Two addresses can claim one identity.** When that happens only the first is
+  recorded and the second raises an `identity_clash` event naming the address
+  and the registry entry that lost its reading. `wifi-diag diagnose` reports the
+  count, and a device whose every reading clashed is still listed rather than
+  silently disappearing.
 - **Re-associations are not directly visible.** A device that drops and
   instantly rejoins without rebooting is only detected if it misses a poll or
   lands on a different BSSID.
@@ -284,6 +291,14 @@ readings, band switches, latency, speed, plus `cast_devices`, `cast_readings`,
 `cast_events`, and `ap_scans` for Google device monitoring. At default
 collection intervals, expect roughly 15MB per month for the host's own metrics
 plus about 5MB per month per monitored Cast device.
+
+The Cast tables are keyed on `device_id` rather than the MAC they once used.
+Opening a database written before that change migrates it in place: rows with a
+real MAC keep it as their `device_id`, and rows carrying the shared placeholder
+MAC are split by name into `unidentified:<name>` so their histories are at least
+separated. Those split-out rows are history only - they hold no address and are
+never probed, since whatever answers at that address now is a device already
+keyed by MAC or UDN. The migration runs once and is safe to interrupt.
 
 To copy data off a Pi for analysis elsewhere:
 

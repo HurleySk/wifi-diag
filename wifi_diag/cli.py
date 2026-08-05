@@ -192,9 +192,11 @@ def _cmd_devices(store):
     print(f"{'DEVICE':<24} {'IP':<16} {'BAND':<8} {'UP%':>6} {'SWITCHES':>9} {'DROPS':>6}")
     print("─" * 74)
     for device_id, d in sorted(summary.items(), key=lambda kv: (kv[1]["name"] or kv[0])):
+        # No readings at all is not 0% reachable; nothing was ever measured.
+        up = f"{d['reachable_pct']:>5.0f}%" if d["total"] else "     -"
         print(
             f"{(d['name'] or device_id):<24} {(d['last_ip'] or '?'):<16} "
-            f"{(d['dominant_band'] or '?'):<8} {d['reachable_pct']:>5.0f}% "
+            f"{(d['dominant_band'] or '?'):<8} {up} "
             f"{d['band_switches']:>9} {d['dropouts']:>6}"
         )
 

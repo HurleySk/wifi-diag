@@ -262,51 +262,8 @@ class TestCastStore:
 class TestCastIdentityMigration:
     """A MAC-keyed database predates firmware that reports no MAC at all."""
 
-    def _legacy_db(self, tmp_path, rows, devices):
-        import sqlite3
-        db = tmp_path / "legacy.db"
-        conn = sqlite3.connect(str(db))
-        conn.execute(
-            """CREATE TABLE cast_devices (
-                   mac TEXT PRIMARY KEY, name TEXT, model TEXT, firmware TEXT,
-                   first_seen TEXT, last_seen TEXT, last_ip TEXT
-               )"""
-        )
-        conn.execute(
-            """CREATE TABLE cast_readings (
-                   id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL,
-                   host TEXT NOT NULL, mac TEXT NOT NULL, ip TEXT, name TEXT,
-                   ssid TEXT, bssid TEXT, band TEXT, channel INTEGER,
-                   frequency_mhz INTEGER, reachable INTEGER NOT NULL,
-                   ethernet INTEGER, uptime_secs REAL, rtt_avg_ms REAL,
-                   packet_loss_pct REAL
-               )"""
-        )
-        conn.execute(
-            """CREATE TABLE cast_events (
-                   id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL,
-                   host TEXT NOT NULL, mac TEXT NOT NULL, name TEXT,
-                   event_type TEXT NOT NULL, detail TEXT
-               )"""
-        )
-        for mac, name, ip in rows:
-            conn.execute(
-                "INSERT INTO cast_readings (timestamp, host, mac, ip, name, reachable)"
-                " VALUES ('2026-08-01T10:00:00+00:00', 'testpi', ?, ?, ?, 1)",
-                (mac, ip, name),
-            )
-        for mac, name, ip in devices:
-            conn.execute(
-                "INSERT INTO cast_devices (mac, name, last_ip) VALUES (?, ?, ?)",
-                (mac, name, ip),
-            )
-        conn.commit()
-        conn.close()
-        return db
-
-    def test_real_mac_history_survives_the_migration(self, tmp_path):
-        db = self._legacy_db(
-            tmp_path,
+    def test_real_mac_history_survives_the_migration(self, legacy_cast_db):
+        db = legacy_cast_db(
             [("d8:8c:79:21:66:8a", "Living Room speaker", "192.168.1.160")],
             [("d8:8c:79:21:66:8a", "Living Room speaker", "192.168.1.160")],
         )
@@ -319,10 +276,9 @@ class TestCastIdentityMigration:
         finally:
             store.close()
 
-    def test_placeholder_mac_history_is_split_by_name(self, tmp_path):
+    def test_placeholder_mac_history_is_split_by_name(self, legacy_cast_db):
         """Several devices shared the all-zero MAC, so their rows were merged."""
-        db = self._legacy_db(
-            tmp_path,
+        db = legacy_cast_db(
             [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163"),
              ("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163"),
              ("00:00:00:00:00:00", "Kitchen Pod", "192.168.1.161")],
@@ -337,9 +293,55 @@ class TestCastIdentityMigration:
         finally:
             store.close()
 
-    def test_migration_is_idempotent(self, tmp_path):
-        db = self._legacy_db(
-            tmp_path,
+    def test_split_out_history_is_left_with_no_address_to_probe(self, legacy_cast_db):
+        """Keep its address and the scheduler probes it against the real device."""
+        db = legacy_cast_db(
+            [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163")],
+            [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163"),
+             ("d8:8c:79:21:66:8a", "Living Room speaker", "192.168.1.160")],
+        )
+        store = DiagStore(db)
+        try:
+            by_id = {d["device_id"]: d for d in store.get_cast_devices()}
+            assert by_id["unidentified:bigboitv"]["last_ip"] is None
+            assert by_id["d8:8c:79:21:66:8a"]["last_ip"] == "192.168.1.160"
+        finally:
+            store.close()
+
+    def test_an_already_migrated_ghost_is_repaired_on_open(self, legacy_cast_db):
+        db = legacy_cast_db(
+            [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163")],
+            [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163")],
+        )
+        store = DiagStore(db)
+        store.conn.execute(
+            "UPDATE cast_devices SET last_ip = '192.168.1.163'"
+            " WHERE device_id = 'unidentified:bigboitv'"
+        )
+        store.conn.commit()
+        store.close()
+
+        store = DiagStore(db)
+        try:
+            assert store.get_cast_devices()[0]["last_ip"] is None
+        finally:
+            store.close()
+
+    def test_uppercase_placeholder_mac_is_recognised(self, legacy_cast_db):
+        db = legacy_cast_db(
+            [("FF:FF:FF:FF:FF:FF", "BigBoiTV", "192.168.1.163")],
+            [("FF:FF:FF:FF:FF:FF", "BigBoiTV", "192.168.1.163")],
+        )
+        store = DiagStore(db)
+        try:
+            rows = store.get_cast_readings()
+            assert rows[0]["device_id"] == "unidentified:bigboitv"
+            assert rows[0]["mac"] is None
+        finally:
+            store.close()
+
+    def test_migration_is_idempotent(self, legacy_cast_db):
+        db = legacy_cast_db(
             [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163")],
             [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163")],
         )

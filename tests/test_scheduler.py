@@ -1,7 +1,19 @@
+import json
+
 import pytest
 
+from wifi_diag.parsers.eureka_parser import parse_eureka_info
 from wifi_diag.scheduler import DiagScheduler
 from wifi_diag.store import DiagStore
+
+
+def eureka(mac=None, udn=None, ip=None, name=None, uptime=100.0,
+           bssid="78:67:0e:6f:a7:fd"):
+    return parse_eureka_info(json.dumps({
+        "mac_address": mac, "ssdp_udn": udn, "name": name, "ip_address": ip,
+        "ssid": "BisNet", "bssid": bssid, "ethernet_connected": False,
+        "uptime": uptime, "cast_build_revision": "1.68.cast",
+    }))
 
 
 @pytest.fixture
@@ -108,11 +120,8 @@ class FakeCastCollector:
 
 
 def _info(mac, ip, uptime=100.0, bssid="78:67:0e:6f:a7:fd"):
-    return {
-        "device_id": mac, "mac": mac, "name": mac.upper(), "ip": ip, "ssid": "BisNet",
-        "bssid": bssid, "ethernet": False, "uptime_secs": uptime,
-        "firmware": "1.0",
-    }
+    return eureka(mac=mac, udn=f"udn-{mac}", ip=ip, name=mac.upper(),
+                  uptime=uptime, bssid=bssid)
 
 
 class TestMultiCycle:
@@ -203,11 +212,7 @@ class TestSharedIdentity:
     """Firmware 1.68 reports no MAC, so several devices once looked like one."""
 
     def _udn_info(self, udn, ip, name):
-        return {
-            "device_id": f"udn:{udn}", "mac": None, "name": name, "ip": ip,
-            "ssid": "BisNet", "bssid": "78:67:0e:6f:a7:fd", "ethernet": False,
-            "uptime_secs": 100.0, "firmware": "1.68.cast",
-        }
+        return eureka(udn=udn, ip=ip, name=name)
 
     def test_devices_without_macs_stay_separate(self, sched, store):
         sched.cast_collector = FakeCastCollector({
@@ -236,17 +241,60 @@ class TestSharedIdentity:
         assert len(clashes) == 1
         assert "192.168.1.163" in clashes[0]["detail"]
 
+    def test_clash_detail_names_the_entry_that_lost_its_reading(self, sched, store):
+        store.upsert_cast_device({
+            "device_id": "stale-entry", "name": "BigBoiTV", "model": None,
+            "firmware": None, "last_ip": "192.168.1.163",
+            "timestamp": "2026-08-01T00:00:00+00:00",
+        })
+        sched.cast_collector = FakeCastCollector({
+            "192.168.1.161": self._udn_info("same", "192.168.1.161", "Kitchen Pod"),
+            "192.168.1.163": self._udn_info("same", "192.168.1.163", "BigBoiTV"),
+        })
+        sched._collect_cast()
+
+        clash = [e for e in store.get_cast_events()
+                 if e["event_type"] == "identity_clash"][0]
+        detail = json.loads(clash["detail"])
+        assert detail == {"ip": "192.168.1.163", "suppressed_id": "stale-entry"}
+
+
+class TestMigratedGhosts:
+    """History the migration split by name is not a device that can be probed."""
+
+    def test_a_split_out_fragment_never_clashes_with_the_real_device(
+        self, legacy_cast_db, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "wifi_diag.scheduler.discover_cast_devices", lambda timeout=None: []
+        )
+        db = legacy_cast_db(
+            [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163")],
+            [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163")],
+        )
+        store = DiagStore(db)
+        try:
+            sched = DiagScheduler(store, dry_run=True)
+            sched.cast_collector = FakeCastCollector({
+                "192.168.1.163": eureka(
+                    udn="udn-tv", ip="192.168.1.163", name="BigBoiTV"
+                ),
+            })
+            for _ in range(3):
+                sched._collect_cast()
+
+            assert [e for e in store.get_cast_events()
+                    if e["event_type"] == "identity_clash"] == []
+            assert len(store.get_cast_readings(device_id="udn:udn-tv")) == 3
+        finally:
+            store.close()
+
 
 class TestTransientMacLoss:
     """A Cast device can blank its MAC for a while and then report it again."""
 
     def _info(self, mac, udn, ip, name):
-        return {
-            "device_id": mac or f"udn:{udn}", "mac": mac, "udn": udn,
-            "name": name, "ip": ip, "ssid": "BisNet",
-            "bssid": "78:67:0e:6f:a7:fd", "ethernet": False,
-            "uptime_secs": 100.0, "firmware": "1.68.cast",
-        }
+        return eureka(mac=mac, udn=udn, ip=ip, name=name)
 
     def test_identity_survives_the_mac_blanking_out(self, sched, store):
         real = self._info("cc:f4:11:cc:d2:e8", "udn-kitchen", "192.168.1.161", "Kitchen Pod")
@@ -288,3 +336,36 @@ class TestTransientMacLoss:
         sched._collect_cast()
 
         assert [r["device_id"] for r in store.get_cast_readings()] == ["cc:f4:11:cc:d2:e8"]
+
+    def test_identity_survives_a_mac_appearing_for_the_first_time(self, sched, store):
+        """The device was first seen without a MAC, so the UDN key is the one."""
+        blank = self._info(None, "udn-tv", "192.168.1.163", "BigBoiTV")
+        real = self._info("cc:f4:11:aa:bb:cc", "udn-tv", "192.168.1.163", "BigBoiTV")
+
+        sched.cast_collector = FakeCastCollector({"192.168.1.163": blank})
+        sched._collect_cast()
+        sched.cast_collector = FakeCastCollector({"192.168.1.163": real})
+        sched._collect_cast()
+        sched._collect_cast()
+
+        assert {r["device_id"] for r in store.get_cast_readings()} == {"udn:udn-tv"}
+        assert [d["device_id"] for d in store.get_cast_devices()] == ["udn:udn-tv"]
+        assert store.get_cast_devices()[0]["mac"] == "cc:f4:11:aa:bb:cc"
+
+    def test_identity_is_stable_when_the_registry_already_forked(self, sched, store):
+        """Two rows, one UDN: whichever is picked must not vary by name order."""
+        for device_id, mac, name in [
+            ("udn:udn-tv", None, "aaa-first-by-name"),
+            ("cc:f4:11:aa:bb:cc", "cc:f4:11:aa:bb:cc", "zzz-later-by-name"),
+        ]:
+            store.upsert_cast_device({
+                "device_id": device_id, "mac": mac, "udn": "udn-tv", "name": name,
+                "model": None, "firmware": None, "last_ip": None,
+                "timestamp": "2026-08-01T00:00:00+00:00",
+            })
+        sched.cast_collector = FakeCastCollector({
+            "192.168.1.163": self._info(None, "udn-tv", "192.168.1.163", "BigBoiTV"),
+        })
+        sched._collect_cast()
+
+        assert [r["device_id"] for r in store.get_cast_readings()] == ["cc:f4:11:aa:bb:cc"]
