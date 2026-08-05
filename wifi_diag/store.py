@@ -1,6 +1,10 @@
 import sqlite3
 from pathlib import Path
 from . import config
+from .parsers.eureka_parser import PLACEHOLDER_MACS
+
+# Rendered into migration SQL, so the order must not vary between runs.
+_PLACEHOLDER_MACS = tuple(sorted(PLACEHOLDER_MACS))
 
 
 class DiagStore:
@@ -69,7 +73,8 @@ class DiagStore:
                 ON speed_readings(host, timestamp);
 
             CREATE TABLE IF NOT EXISTS cast_devices (
-                mac TEXT PRIMARY KEY,
+                device_id TEXT PRIMARY KEY,
+                mac TEXT,
                 name TEXT,
                 model TEXT,
                 firmware TEXT,
@@ -82,7 +87,8 @@ class DiagStore:
                 id INTEGER PRIMARY KEY,
                 timestamp TEXT NOT NULL,
                 host TEXT NOT NULL,
-                mac TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                mac TEXT,
                 ip TEXT,
                 name TEXT,
                 ssid TEXT,
@@ -96,20 +102,15 @@ class DiagStore:
                 rtt_avg_ms REAL,
                 packet_loss_pct REAL
             );
-            CREATE INDEX IF NOT EXISTS idx_cast_mac_ts
-                ON cast_readings(mac, timestamp);
-
             CREATE TABLE IF NOT EXISTS cast_events (
                 id INTEGER PRIMARY KEY,
                 timestamp TEXT NOT NULL,
                 host TEXT NOT NULL,
-                mac TEXT NOT NULL,
+                device_id TEXT NOT NULL,
                 name TEXT,
                 event_type TEXT NOT NULL,
                 detail TEXT
             );
-            CREATE INDEX IF NOT EXISTS idx_cast_event_mac_ts
-                ON cast_events(mac, timestamp);
 
             CREATE TABLE IF NOT EXISTS ap_scans (
                 id INTEGER PRIMARY KEY,
@@ -125,18 +126,115 @@ class DiagStore:
                 ON ap_scans(bssid, timestamp);
         """)
 
+    def _columns(self, table):
+        return {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+
     def _migrate(self):
         """Add columns introduced after a database may already exist."""
         # NULL interface means unknown provenance, not WiFi.
         for table in ("latency_readings", "speed_readings"):
-            existing = {
-                r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")
-            }
-            if "interface" not in existing:
+            if "interface" not in self._columns(table):
                 self.conn.execute(f"ALTER TABLE {table} ADD COLUMN interface TEXT")
+        self._migrate_cast_identity()
         self.conn.commit()
 
-    def _query(self, table, host=None, target=None, mac=None, start=None, end=None):
+    def _migrate_cast_identity(self):
+        """Re-key Cast tables from MAC onto device_id.
+
+        Rows whose MAC is the all-zero placeholder cannot be told apart by it -
+        several devices reported it at once - so they are split by name. That
+        recovers separate histories rather than leaving them merged, but it
+        cannot rejoin them to the UDN identity the same devices now report.
+        """
+        legacy = "'unidentified:' || COALESCE(LOWER(NULLIF(name, '')), mac)"
+        derived = (
+            f"CASE WHEN mac IS NULL OR mac IN {_PLACEHOLDER_MACS} "
+            f"THEN {legacy} ELSE mac END"
+        )
+        # The old column was NOT NULL, so a placeholder cannot be nulled in
+        # place; each table is rebuilt rather than altered.
+        real_mac = f"CASE WHEN mac IN {_PLACEHOLDER_MACS} THEN NULL ELSE mac END"
+
+        if "device_id" not in self._columns("cast_readings"):
+            self.conn.executescript(f"""
+                CREATE TABLE cast_readings_new (
+                    id INTEGER PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    host TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    mac TEXT,
+                    ip TEXT,
+                    name TEXT,
+                    ssid TEXT,
+                    bssid TEXT,
+                    band TEXT,
+                    channel INTEGER,
+                    frequency_mhz INTEGER,
+                    reachable INTEGER NOT NULL,
+                    ethernet INTEGER,
+                    uptime_secs REAL,
+                    rtt_avg_ms REAL,
+                    packet_loss_pct REAL
+                );
+                INSERT INTO cast_readings_new
+                    SELECT id, timestamp, host, {derived}, {real_mac}, ip, name,
+                           ssid, bssid, band, channel, frequency_mhz, reachable,
+                           ethernet, uptime_secs, rtt_avg_ms, packet_loss_pct
+                    FROM cast_readings;
+                DROP TABLE cast_readings;
+                ALTER TABLE cast_readings_new RENAME TO cast_readings;
+            """)
+
+        if "device_id" not in self._columns("cast_events"):
+            self.conn.executescript(f"""
+                CREATE TABLE cast_events_new (
+                    id INTEGER PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    host TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    name TEXT,
+                    event_type TEXT NOT NULL,
+                    detail TEXT
+                );
+                INSERT INTO cast_events_new
+                    SELECT id, timestamp, host, {derived}, name, event_type, detail
+                    FROM cast_events;
+                DROP TABLE cast_events;
+                ALTER TABLE cast_events_new RENAME TO cast_events;
+            """)
+
+        if "device_id" not in self._columns("cast_devices"):
+            self.conn.executescript(f"""
+                CREATE TABLE cast_devices_new (
+                    device_id TEXT PRIMARY KEY,
+                    mac TEXT,
+                    name TEXT,
+                    model TEXT,
+                    firmware TEXT,
+                    first_seen TEXT,
+                    last_seen TEXT,
+                    last_ip TEXT
+                );
+                INSERT OR REPLACE INTO cast_devices_new
+                    SELECT {derived}, {real_mac}, name, model, firmware,
+                           first_seen, last_seen, last_ip
+                    FROM cast_devices;
+                DROP TABLE cast_devices;
+                ALTER TABLE cast_devices_new RENAME TO cast_devices;
+            """)
+
+        # Indexed here rather than in _create_tables: on a pre-existing database
+        # the column does not exist until the rebuilds above have run.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cast_device_ts"
+            " ON cast_readings(device_id, timestamp)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cast_event_device_ts"
+            " ON cast_events(device_id, timestamp)"
+        )
+
+    def _query(self, table, host=None, target=None, device_id=None, start=None, end=None):
         query = f"SELECT * FROM {table} WHERE 1=1"
         params = []
         if host:
@@ -145,9 +243,9 @@ class DiagStore:
         if target:
             query += " AND target = ?"
             params.append(target)
-        if mac:
-            query += " AND mac = ?"
-            params.append(mac)
+        if device_id:
+            query += " AND device_id = ?"
+            params.append(device_id)
         if start:
             query += " AND timestamp >= ?"
             params.append(start)
@@ -243,38 +341,44 @@ class DiagStore:
         return [r[0] for r in rows]
 
     def upsert_cast_device(self, device):
+        params = dict(device)
+        params.setdefault("mac", None)
         self.conn.execute(
             """INSERT INTO cast_devices
-               (mac, name, model, firmware, first_seen, last_seen, last_ip)
-               VALUES (:mac, :name, :model, :firmware, :timestamp, :timestamp, :last_ip)
-               ON CONFLICT(mac) DO UPDATE SET
+               (device_id, mac, name, model, firmware, first_seen, last_seen, last_ip)
+               VALUES (:device_id, :mac, :name, :model, :firmware, :timestamp,
+                :timestamp, :last_ip)
+               ON CONFLICT(device_id) DO UPDATE SET
+                 mac = COALESCE(excluded.mac, cast_devices.mac),
                  name = COALESCE(excluded.name, cast_devices.name),
                  model = COALESCE(excluded.model, cast_devices.model),
                  firmware = COALESCE(excluded.firmware, cast_devices.firmware),
                  last_seen = excluded.last_seen,
                  last_ip = COALESCE(excluded.last_ip, cast_devices.last_ip)""",
-            device,
+            params,
         )
         self.conn.commit()
 
     def insert_cast_reading(self, reading):
+        params = dict(reading)
+        params.setdefault("mac", None)
         self.conn.execute(
             """INSERT INTO cast_readings
-               (timestamp, host, mac, ip, name, ssid, bssid, band, channel,
-                frequency_mhz, reachable, ethernet, uptime_secs, rtt_avg_ms,
-                packet_loss_pct)
-               VALUES (:timestamp, :host, :mac, :ip, :name, :ssid, :bssid,
-                :band, :channel, :frequency_mhz, :reachable, :ethernet,
+               (timestamp, host, device_id, mac, ip, name, ssid, bssid, band,
+                channel, frequency_mhz, reachable, ethernet, uptime_secs,
+                rtt_avg_ms, packet_loss_pct)
+               VALUES (:timestamp, :host, :device_id, :mac, :ip, :name, :ssid,
+                :bssid, :band, :channel, :frequency_mhz, :reachable, :ethernet,
                 :uptime_secs, :rtt_avg_ms, :packet_loss_pct)""",
-            reading,
+            params,
         )
         self.conn.commit()
 
     def insert_cast_event(self, event):
         self.conn.execute(
             """INSERT INTO cast_events
-               (timestamp, host, mac, name, event_type, detail)
-               VALUES (:timestamp, :host, :mac, :name, :event_type, :detail)""",
+               (timestamp, host, device_id, name, event_type, detail)
+               VALUES (:timestamp, :host, :device_id, :name, :event_type, :detail)""",
             event,
         )
         self.conn.commit()
@@ -295,11 +399,15 @@ class DiagStore:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_cast_readings(self, mac=None, host=None, start=None, end=None):
-        return self._query("cast_readings", host=host, mac=mac, start=start, end=end)
+    def get_cast_readings(self, device_id=None, host=None, start=None, end=None):
+        return self._query(
+            "cast_readings", host=host, device_id=device_id, start=start, end=end
+        )
 
-    def get_cast_events(self, mac=None, host=None, start=None, end=None):
-        return self._query("cast_events", host=host, mac=mac, start=start, end=end)
+    def get_cast_events(self, device_id=None, host=None, start=None, end=None):
+        return self._query(
+            "cast_events", host=host, device_id=device_id, start=start, end=end
+        )
 
     def get_ap_scans(self, bssid=None, start=None, end=None):
         query = "SELECT * FROM ap_scans WHERE 1=1"
@@ -316,10 +424,11 @@ class DiagStore:
         query += " ORDER BY timestamp"
         return [dict(r) for r in self.conn.execute(query, params).fetchall()]
 
-    def get_latest_cast_reading(self, mac):
+    def get_latest_cast_reading(self, device_id):
         row = self.conn.execute(
-            "SELECT * FROM cast_readings WHERE mac = ? ORDER BY timestamp DESC LIMIT 1",
-            (mac,),
+            "SELECT * FROM cast_readings WHERE device_id = ?"
+            " ORDER BY timestamp DESC LIMIT 1",
+            (device_id,),
         ).fetchone()
         return dict(row) if row else None
 

@@ -14,21 +14,21 @@ def device_summary(store, days=7):
     readings = store.get_cast_readings(start=start)
     events = store.get_cast_events(start=start)
 
-    by_mac = {}
+    by_device = {}
     for r in readings:
-        by_mac.setdefault(r["mac"], []).append(r)
+        by_device.setdefault(r["device_id"], []).append(r)
 
-    events_by_mac = {}
+    events_by_device = {}
     for e in events:
-        events_by_mac.setdefault(e["mac"], []).append(e)
+        events_by_device.setdefault(e["device_id"], []).append(e)
 
     devices = {}
-    for mac, rows in by_mac.items():
+    for device_id, rows in by_device.items():
         total = len(rows)
         reachable = sum(1 for r in rows if r["reachable"])
         bands = Counter(r["band"] for r in rows if r["band"])
         rtts = [r["rtt_avg_ms"] for r in rows if r["rtt_avg_ms"] is not None]
-        counts = Counter(e["event_type"] for e in events_by_mac.get(mac, []))
+        counts = Counter(e["event_type"] for e in events_by_device.get(device_id, []))
 
         summary = {
             "name": next((r["name"] for r in reversed(rows) if r["name"]), None),
@@ -42,6 +42,6 @@ def device_summary(store, days=7):
         }
         for event_type, key in _EVENT_KEYS.items():
             summary[key] = counts.get(event_type, 0)
-        devices[mac] = summary
+        devices[device_id] = summary
 
     return {"days": days, "devices": devices}

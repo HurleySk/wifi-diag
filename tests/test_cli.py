@@ -114,19 +114,19 @@ class TestDeviceCommands:
         s = DiagStore(str(db_path))
         s.insert_cast_reading({
             "timestamp": "2026-08-01T10:00:00+00:00", "host": "testpi",
-            "mac": "cc:f4:11:a2:d3:af", "ip": "192.168.1.157", "name": "Kitchen Pod",
+            "device_id": "cc:f4:11:a2:d3:af", "ip": "192.168.1.157", "name": "Kitchen Pod",
             "ssid": "BisNet", "bssid": "78:67:0e:6f:a7:fd", "band": "5GHz",
             "channel": 104, "frequency_mhz": 5520, "reachable": 1, "ethernet": 0,
             "uptime_secs": 100.0, "rtt_avg_ms": 4.0, "packet_loss_pct": 0.0,
         })
         s.upsert_cast_device({
-            "mac": "cc:f4:11:a2:d3:af", "name": "Kitchen Pod", "model": "Nest Hub",
+            "device_id": "cc:f4:11:a2:d3:af", "name": "Kitchen Pod", "model": "Nest Hub",
             "firmware": "1.68", "last_ip": "192.168.1.157",
             "timestamp": "2026-08-01T10:00:00+00:00",
         })
         s.insert_cast_event({
             "timestamp": "2026-08-01T11:00:00+00:00", "host": "testpi",
-            "mac": "cc:f4:11:a2:d3:af", "name": "Kitchen Pod",
+            "device_id": "cc:f4:11:a2:d3:af", "name": "Kitchen Pod",
             "event_type": "band_switch", "detail": '{"from": "5GHz", "to": "2.4GHz"}',
         })
         s.close()

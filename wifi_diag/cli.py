@@ -86,6 +86,11 @@ def _cmd_collect(store, args):
     sched.run()
 
 
+def _rtt(value):
+    """Total loss leaves no round-trip to average, which is not 'None ms'."""
+    return f"{value}ms avg" if value is not None else "no reply"
+
+
 def _cmd_status(store):
     hosts = store.get_hosts()
     if not hosts:
@@ -100,11 +105,11 @@ def _cmd_status(store):
 
         gw = store.get_latest_latency(h, config.GATEWAY_TARGET)
         if gw:
-            print(f"  Gateway: {gw['rtt_avg_ms']}ms avg | {gw['packet_loss_pct']}% loss")
+            print(f"  Gateway: {_rtt(gw['rtt_avg_ms'])} | {gw['packet_loss_pct']}% loss")
 
         ext = store.get_latest_latency(h, config.EXTERNAL_TARGET)
         if ext:
-            print(f"  External: {ext['rtt_avg_ms']}ms avg | {ext['packet_loss_pct']}% loss")
+            print(f"  External: {_rtt(ext['rtt_avg_ms'])} | {ext['packet_loss_pct']}% loss")
 
         speed = store.get_latest_speed(h)
         if speed:
@@ -186,9 +191,9 @@ def _cmd_devices(store):
 
     print(f"{'DEVICE':<24} {'IP':<16} {'BAND':<8} {'UP%':>6} {'SWITCHES':>9} {'DROPS':>6}")
     print("─" * 74)
-    for mac, d in sorted(summary.items(), key=lambda kv: (kv[1]["name"] or kv[0])):
+    for device_id, d in sorted(summary.items(), key=lambda kv: (kv[1]["name"] or kv[0])):
         print(
-            f"{(d['name'] or mac):<24} {(d['last_ip'] or '?'):<16} "
+            f"{(d['name'] or device_id):<24} {(d['last_ip'] or '?'):<16} "
             f"{(d['dominant_band'] or '?'):<8} {d['reachable_pct']:>5.0f}% "
             f"{d['band_switches']:>9} {d['dropouts']:>6}"
         )
@@ -197,7 +202,7 @@ def _cmd_devices(store):
 def _resolve_device(store, needle):
     needle = needle.strip().lower()
     devices = store.get_cast_devices()
-    exact = [d for d in devices if d["mac"] == needle]
+    exact = [d for d in devices if d["device_id"] == needle or d["mac"] == needle]
     if exact:
         return exact[0]
     matches = [d for d in devices if (d["name"] or "").lower() == needle]
@@ -208,7 +213,7 @@ def _resolve_device(store, needle):
     if len(matches) > 1:
         print(f"'{needle}' matches multiple devices:")
         for d in matches:
-            print(f"  {d['name']} ({d['mac']})")
+            print(f"  {d['name']} ({d['device_id']})")
         return None
     print(f"No device matching '{needle}'.")
     return None
@@ -222,10 +227,10 @@ def _cmd_device(store, name, days):
         return
 
     start = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    readings = store.get_cast_readings(mac=device["mac"], start=start)
-    events = store.get_cast_events(mac=device["mac"], start=start)
+    readings = store.get_cast_readings(device_id=device["device_id"], start=start)
+    events = store.get_cast_events(device_id=device["device_id"], start=start)
 
-    print(f"\n── {device['name'] or device['mac']} ({device['mac']}) ──")
+    print(f"\n── {device['name'] or device['device_id']} ({device['device_id']}) ──")
     print(f"  Model:    {device['model'] or 'unknown'}")
     print(f"  Firmware: {device['firmware'] or 'unknown'}")
     print(f"  Last IP:  {device['last_ip'] or 'unknown'}")
@@ -269,6 +274,6 @@ def _cmd_events(store, hours):
     print("─" * 90)
     for e in events:
         print(
-            f"{e['timestamp']:<28} {(e['name'] or e['mac']):<22} "
+            f"{e['timestamp']:<28} {(e['name'] or e['device_id']):<22} "
             f"{e['event_type']:<14} {e['detail']}"
         )

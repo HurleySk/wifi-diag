@@ -30,11 +30,11 @@ class TestCastCollection:
         sched._collect_scan()
         sched._collect_cast()
         readings = store.get_cast_readings()
-        assert len(readings) == 3
-        by_mac = {r["mac"]: r for r in readings}
-        assert by_mac["cc:f4:11:a2:d3:af"]["band"] == "5GHz"
-        assert by_mac["cc:f4:11:a2:d3:af"]["channel"] == 104
-        assert by_mac["d8:8c:79:21:66:8a"]["band"] == "2.4GHz"
+        assert len(readings) == 4
+        by_id = {r["device_id"]: r for r in readings}
+        assert by_id["cc:f4:11:a2:d3:af"]["band"] == "5GHz"
+        assert by_id["cc:f4:11:a2:d3:af"]["channel"] == 104
+        assert by_id["d8:8c:79:21:66:8a"]["band"] == "2.4GHz"
 
     def test_unknown_bssid_yields_null_band(self, sched, store):
         # No scan run, so the band map is empty and band must stay NULL.
@@ -45,16 +45,17 @@ class TestCastCollection:
     def test_empty_bssid_device_has_null_band(self, sched, store):
         sched._collect_scan()
         sched._collect_cast()
-        r = [x for x in store.get_cast_readings() if x["mac"] == "ac:67:84:89:93:63"][0]
+        r = [x for x in store.get_cast_readings() if x["device_id"] == "ac:67:84:89:93:63"][0]
         assert r["bssid"] is None
         assert r["band"] is None
 
     def test_devices_registered(self, sched, store):
         sched._collect_cast()
         devices = store.get_cast_devices()
-        assert len(devices) == 3
-        assert {d["mac"] for d in devices} == {
+        assert len(devices) == 4
+        assert {d["device_id"] for d in devices} == {
             "cc:f4:11:a2:d3:af", "d8:8c:79:21:66:8a", "ac:67:84:89:93:63",
+            "udn:5f00bcbf-c61c-1622-325d-d3b1fa3c4e37",
         }
 
     def test_first_cycle_emits_no_events(self, sched, store):
@@ -65,14 +66,14 @@ class TestCastCollection:
         """A DHCP lease change must not create a second device record."""
         # Seed a stale IP for the device the mock reports at 192.168.1.157.
         store.upsert_cast_device({
-            "mac": "cc:f4:11:a2:d3:af", "name": "Sam's Pod", "model": None,
+            "device_id": "cc:f4:11:a2:d3:af", "name": "Sam's Pod", "model": None,
             "firmware": None, "last_ip": "192.168.1.99",
             "timestamp": "2026-08-01T10:00:00+00:00",
         })
         sched._collect_cast()
-        macs = [d["mac"] for d in store.get_cast_devices()]
-        assert macs.count("cc:f4:11:a2:d3:af") == 1
-        assert len(set(macs)) == len(macs)
+        ids = [d["device_id"] for d in store.get_cast_devices()]
+        assert ids.count("cc:f4:11:a2:d3:af") == 1
+        assert len(set(ids)) == len(ids)
 
     def test_unreachable_device_recorded_as_not_reachable(self, sched, store, monkeypatch):
         def boom(ip=None):
@@ -84,7 +85,7 @@ class TestCastCollection:
         readings = store.get_cast_readings()
         assert len(readings) == 1
         assert readings[0]["reachable"] == 0
-        assert readings[0]["mac"] == "cc:f4:11:a2:d3:af"
+        assert readings[0]["device_id"] == "cc:f4:11:a2:d3:af"
 
 
 class FakeCastCollector:
@@ -108,7 +109,7 @@ class FakeCastCollector:
 
 def _info(mac, ip, uptime=100.0, bssid="78:67:0e:6f:a7:fd"):
     return {
-        "mac": mac, "name": mac.upper(), "ip": ip, "ssid": "BisNet",
+        "device_id": mac, "mac": mac, "name": mac.upper(), "ip": ip, "ssid": "BisNet",
         "bssid": bssid, "ethernet": False, "uptime_secs": uptime,
         "firmware": "1.0",
     }
@@ -118,7 +119,7 @@ class TestMultiCycle:
     def test_dhcp_move_yields_one_reading_and_no_false_dropout(self, sched, store):
         """A device that changed lease must not also be probed at its old IP."""
         store.upsert_cast_device({
-            "mac": "aa", "name": "AA", "model": None, "firmware": None,
+            "device_id": "aa", "name": "AA", "model": None, "firmware": None,
             "last_ip": "192.168.1.99", "timestamp": "2026-08-01T00:00:00+00:00",
         })
         sched.cast_collector = FakeCastCollector({"192.168.1.157": _info("aa", "192.168.1.157")})
@@ -143,12 +144,12 @@ class TestMultiCycle:
         sched._collect_cast()
         sched._collect_cast()
 
-        macs = [r["mac"] for r in store.get_cast_readings()]
+        macs = [r["device_id"] for r in store.get_cast_readings()]
         # bb must never get two readings in one cycle, and aa must not linger.
         assert macs.count("aa") == 1
         assert "aa" not in sched._targets
         assert macs.count("bb") <= 3
-        assert all(e["mac"] != "aa" for e in store.get_cast_events())
+        assert all(e["device_id"] != "aa" for e in store.get_cast_events())
 
     def test_reboot_is_detected_across_a_missed_poll(self, sched, store):
         """A reboot usually costs a poll; the dropout must not hide it."""
@@ -196,3 +197,41 @@ class TestBandMapSeeding:
         sched.scan_collector = type("Empty", (), {"collect": lambda self: []})()
         sched._collect_scan()
         assert sched._band_map == before
+
+
+class TestSharedIdentity:
+    """Firmware 1.68 reports no MAC, so several devices once looked like one."""
+
+    def _udn_info(self, udn, ip, name):
+        return {
+            "device_id": f"udn:{udn}", "mac": None, "name": name, "ip": ip,
+            "ssid": "BisNet", "bssid": "78:67:0e:6f:a7:fd", "ethernet": False,
+            "uptime_secs": 100.0, "firmware": "1.68.cast",
+        }
+
+    def test_devices_without_macs_stay_separate(self, sched, store):
+        sched.cast_collector = FakeCastCollector({
+            "192.168.1.161": self._udn_info("aaa", "192.168.1.161", "Kitchen Pod"),
+            "192.168.1.163": self._udn_info("bbb", "192.168.1.163", "BigBoiTV"),
+        })
+        sched._collect_cast()
+
+        readings = store.get_cast_readings()
+        assert {r["device_id"] for r in readings} == {"udn:aaa", "udn:bbb"}
+        assert {r["name"] for r in readings} == {"Kitchen Pod", "BigBoiTV"}
+        # No MAC was reported, so none may be invented.
+        assert all(r["mac"] is None for r in readings)
+
+    def test_clashing_identity_is_recorded_not_dropped(self, sched, store):
+        """Two addresses, one identity: the loser must leave a trace."""
+        sched.cast_collector = FakeCastCollector({
+            "192.168.1.161": self._udn_info("same", "192.168.1.161", "Kitchen Pod"),
+            "192.168.1.163": self._udn_info("same", "192.168.1.163", "BigBoiTV"),
+        })
+        sched._collect_cast()
+
+        assert len(store.get_cast_readings()) == 1
+        clashes = [e for e in store.get_cast_events()
+                   if e["event_type"] == "identity_clash"]
+        assert len(clashes) == 1
+        assert "192.168.1.163" in clashes[0]["detail"]

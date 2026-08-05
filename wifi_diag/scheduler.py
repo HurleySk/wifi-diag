@@ -1,3 +1,4 @@
+import json
 import signal
 import sys
 import threading
@@ -43,9 +44,9 @@ class DiagScheduler:
             self._band_map = store.get_bssid_band_map()
         except Exception:
             self._band_map = {}
-        # mac -> {"ip": str, "name": str, "model": str}
+        # device_id -> {"ip": str, "name": str, "model": str}
         self._targets = {}
-        # mac -> last reading dict, for event detection
+        # device_id -> last reading dict, for event detection
         self._last_cast = {}
 
     def run(self):
@@ -184,7 +185,7 @@ class DiagScheduler:
         """Merge the persisted registry, mDNS results, and static IPs."""
         for d in self.store.get_cast_devices():
             if d["last_ip"]:
-                entry = self._targets.setdefault(d["mac"], {})
+                entry = self._targets.setdefault(d["device_id"], {})
                 entry.setdefault("ip", d["last_ip"])
                 entry.setdefault("name", d["name"])
                 entry.setdefault("model", d["model"])
@@ -216,17 +217,17 @@ class DiagScheduler:
         for ip in unidentified_ips:
             self._probe_cast_device(None, ip, None, models.get(ip), ts, seen)
 
-        for mac, target in list(self._targets.items()):
-            if mac in seen:
+        for device_id, target in list(self._targets.items()):
+            if device_id in seen:
                 continue
             ip = target.get("ip")
             if not ip:
                 continue
             self._probe_cast_device(
-                mac, ip, target.get("name"), target.get("model"), ts, seen
+                device_id, ip, target.get("name"), target.get("model"), ts, seen
             )
 
-    def _probe_cast_device(self, known_mac, ip, known_name, model, ts, seen):
+    def _probe_cast_device(self, known_id, ip, known_name, model, ts, seen):
         info = None
         try:
             info = self.cast_collector.collect(ip)
@@ -234,19 +235,22 @@ class DiagScheduler:
             info = None
 
         if info is not None:
-            mac = info["mac"]
+            device_id = info["device_id"]
             name = info.get("name") or known_name
-            if known_mac and known_mac != mac:
+            if known_id and known_id != device_id:
                 # The address moved: a stale mapping makes both devices report bogus state.
-                self._targets.pop(known_mac, None)
-        elif known_mac:
-            mac = known_mac
+                self._targets.pop(known_id, None)
+        elif known_id:
+            device_id = known_id
             name = known_name
         else:
             # Never seen successfully: drop it rather than invent an identity.
             return
 
-        if mac in seen:
+        if device_id in seen:
+            # Two addresses claiming one identity: a reading would overwrite the
+            # other device's. Record it rather than let the loser vanish silently.
+            self._record_identity_clash(device_id, ip, name, ts)
             return
 
         latency = {}
@@ -264,7 +268,8 @@ class DiagScheduler:
         reading = {
             "timestamp": ts,
             "host": config.HOSTNAME,
-            "mac": mac,
+            "device_id": device_id,
+            "mac": info.get("mac") if info else None,
             "ip": ip,
             "name": name,
             "ssid": info.get("ssid") if info else None,
@@ -282,7 +287,8 @@ class DiagScheduler:
         try:
             self.store.insert_cast_reading(reading)
             self.store.upsert_cast_device({
-                "mac": mac,
+                "device_id": device_id,
+                "mac": info.get("mac") if info else None,
                 "name": name,
                 "model": model,
                 "firmware": info.get("firmware") if info else None,
@@ -290,32 +296,51 @@ class DiagScheduler:
                 "timestamp": ts,
             })
         except Exception as e:
-            print(f"  Cast store error for {name or mac}: {e}")
+            print(f"  Cast store error for {name or device_id}: {e}")
             return
 
-        seen.add(mac)
-        self._targets[mac] = {"ip": ip, "name": name, "model": model}
+        seen.add(device_id)
+        self._targets[device_id] = {"ip": ip, "name": name, "model": model}
 
-        prev = self._last_cast.get(mac)
+        prev = self._last_cast.get(device_id)
         for event in detect_cast_events(prev, reading):
-            try:
-                self.store.insert_cast_event({
-                    "timestamp": ts,
-                    "host": config.HOSTNAME,
-                    "mac": mac,
-                    "name": name,
-                    "event_type": event["event_type"],
-                    "detail": event["detail"],
-                })
-            except Exception as e:
-                print(f"  Cast event store error: {e}")
+            self._store_cast_event(
+                device_id, name, event["event_type"], event["detail"], ts
+            )
 
         # Carry uptime across a dropout, or the reboot hides behind it.
         remembered = reading
         if reading["uptime_secs"] is None and prev is not None:
             remembered = dict(reading)
             remembered["uptime_secs"] = prev.get("uptime_secs")
-        self._last_cast[mac] = remembered
+        self._last_cast[device_id] = remembered
+
+    def _store_cast_event(self, device_id, name, event_type, detail, ts):
+        try:
+            self.store.insert_cast_event({
+                "timestamp": ts,
+                "host": config.HOSTNAME,
+                "device_id": device_id,
+                "name": name,
+                "event_type": event_type,
+                "detail": detail,
+            })
+        except Exception as e:
+            print(f"  Cast event store error: {e}")
+
+    def _record_identity_clash(self, device_id, ip, name, ts):
+        label = name or device_id
+        print(
+            f"  {label} at {ip} reports an identity already claimed this cycle "
+            f"({device_id}); no reading stored for it."
+        )
+        self._store_cast_event(
+            device_id,
+            name,
+            "identity_clash",
+            json.dumps({"ip": ip, "device_id": device_id}),
+            ts,
+        )
 
     def _handle_stop(self, signum, frame):
         self.stop()

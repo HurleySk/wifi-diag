@@ -237,6 +237,49 @@ class TestEurekaParser:
         assert result["uptime_secs"] is None
         assert result["ethernet"] is None
 
+    def test_real_mac_is_the_device_id(self):
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        result = parse_eureka_info(
+            '{"mac_address":"AA:BB:CC:DD:EE:FF","ssdp_udn":"5f00bcbf-c61c-1622"}'
+        )
+        # Identity stays the MAC where there is one, so history survives upgrades.
+        assert result["device_id"] == "aa:bb:cc:dd:ee:ff"
+
+    def test_all_zero_mac_falls_back_to_udn(self):
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        result = parse_eureka_info(
+            '{"mac_address":"00:00:00:00:00:00","ssdp_udn":"5f00bcbf-c61c-1622"}'
+        )
+        assert result["mac"] is None
+        assert result["device_id"] == "udn:5f00bcbf-c61c-1622"
+
+    def test_zero_mac_devices_do_not_share_an_identity(self):
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        a = parse_eureka_info(
+            '{"mac_address":"00:00:00:00:00:00","ssdp_udn":"aaa","name":"Kitchen Pod"}'
+        )
+        b = parse_eureka_info(
+            '{"mac_address":"00:00:00:00:00:00","ssdp_udn":"bbb","name":"BigBoiTV"}'
+        )
+        assert a["device_id"] != b["device_id"]
+
+    def test_udn_only_payload_is_identified(self):
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        result = parse_eureka_info('{"ssdp_udn":"72c65da8-7c32","name":"BigBoiTV"}')
+        assert result["mac"] is None
+        assert result["device_id"] == "udn:72c65da8-7c32"
+
+    def test_rejects_payload_with_no_usable_identity(self):
+        import pytest
+        from wifi_diag.parsers.eureka_parser import parse_eureka_info
+
+        with pytest.raises(ValueError):
+            parse_eureka_info('{"mac_address":"00:00:00:00:00:00","name":"Nameless"}')
+
     def test_rejects_non_cast_json(self):
         import pytest
         from wifi_diag.parsers.eureka_parser import parse_eureka_info

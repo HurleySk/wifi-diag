@@ -114,7 +114,7 @@ class TestDeviceSummary:
         ]):
             s.insert_cast_reading({
                 "timestamp": f"2026-08-0{i + 1}T10:00:00+00:00",
-                "host": "testpi", "mac": "cc:f4:11:a2:d3:af", "ip": "192.168.1.157",
+                "host": "testpi", "device_id": "cc:f4:11:a2:d3:af", "ip": "192.168.1.157",
                 "name": "Sam's Pod", "ssid": "BisNet", "bssid": "78:67:0e:6f:a7:fd",
                 "band": band, "channel": 104, "frequency_mhz": 5520,
                 "reachable": reachable, "ethernet": 0, "uptime_secs": 100.0,
@@ -123,7 +123,7 @@ class TestDeviceSummary:
         for etype in ["band_switch", "offline", "reboot", "bssid_switch"]:
             s.insert_cast_event({
                 "timestamp": "2026-08-02T10:00:00+00:00", "host": "testpi",
-                "mac": "cc:f4:11:a2:d3:af", "name": "Sam's Pod",
+                "device_id": "cc:f4:11:a2:d3:af", "name": "Sam's Pod",
                 "event_type": etype, "detail": "{}",
             })
         return s
@@ -162,7 +162,7 @@ class TestDeviceSummary:
         s = DiagStore(":memory:")
         s.insert_cast_reading({
             "timestamp": "2026-08-01T10:00:00+00:00", "host": "testpi",
-            "mac": "ac:67:84:89:93:63", "ip": "192.168.1.152", "name": "Display",
+            "device_id": "ac:67:84:89:93:63", "ip": "192.168.1.152", "name": "Display",
             "ssid": "BisNet", "bssid": None, "band": None, "channel": None,
             "frequency_mhz": None, "reachable": 1, "ethernet": 0,
             "uptime_secs": 10.0, "rtt_avg_ms": None, "packet_loss_pct": None,
@@ -187,7 +187,7 @@ class TestDiagnoseCastSection:
         for i in range(10):
             s.insert_cast_reading({
                 "timestamp": f"2026-08-01T10:{i:02d}:00+00:00", "host": "testpi",
-                "mac": "cc:f4:11:a2:d3:af", "ip": "192.168.1.157",
+                "device_id": "cc:f4:11:a2:d3:af", "ip": "192.168.1.157",
                 "name": "Kitchen Pod", "ssid": "BisNet",
                 "bssid": "78:67:0e:6f:a7:fd", "band": "5GHz", "channel": 104,
                 "frequency_mhz": 5520, "reachable": 0 if i < 4 else 1,
@@ -197,7 +197,7 @@ class TestDiagnoseCastSection:
         for i in range(6):
             s.insert_cast_event({
                 "timestamp": f"2026-08-01T10:{i:02d}:00+00:00", "host": "testpi",
-                "mac": "cc:f4:11:a2:d3:af", "name": "Kitchen Pod",
+                "device_id": "cc:f4:11:a2:d3:af", "name": "Kitchen Pod",
                 "event_type": "band_switch", "detail": "{}",
             })
         return s

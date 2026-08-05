@@ -9,6 +9,7 @@ _FIXTURES = [
     "eureka_pod.json",
     "eureka_speaker.json",
     "eureka_empty_bssid.json",
+    "eureka_no_mac.json",
 ]
 
 
@@ -18,7 +19,7 @@ class CastMockCollector(BaseCollector):
 
     def ips(self):
         """IPs the mock pretends to have discovered."""
-        return ["192.168.1.157", "192.168.1.160", "192.168.1.152"]
+        return ["192.168.1.157", "192.168.1.160", "192.168.1.152", "192.168.1.161"]
 
     def collect(self, ip=None) -> dict:
         name = _FIXTURES[self._index % len(_FIXTURES)]

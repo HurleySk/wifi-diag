@@ -572,6 +572,7 @@ class _StubLatency:
 class _StubCast:
     def collect(self, ip):
         return {
+            "device_id": "aa:bb:cc:dd:ee:ff",
             "mac": "aa:bb:cc:dd:ee:ff",
             "name": "Stub Speaker",
             "ssid": "net",
@@ -728,7 +729,7 @@ class TestCastProbeIsPinned:
         from wifi_diag.collectors import cast
 
         monkeypatch.setattr(cast, "interface_ip", lambda iface: resolved)
-        monkeypatch.setattr(cast, "parse_eureka_info", lambda text: {"mac": "aa"})
+        monkeypatch.setattr(cast, "parse_eureka_info", lambda text: {"device_id": "aa", "mac": "aa"})
         captured = {}
 
         class Response:

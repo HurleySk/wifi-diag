@@ -1,6 +1,18 @@
 import json
 
 
+# Cast firmware from the 1.68 series reports this in place of a real address.
+PLACEHOLDER_MACS = {"00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"}
+
+
+def _real_mac(value):
+    """The reported MAC, or None where the firmware declines to give one."""
+    if not value:
+        return None
+    mac = str(value).strip().lower()
+    return None if mac in PLACEHOLDER_MACS else mac
+
+
 def parse_eureka_info(text: str) -> dict:
     """Normalize a Cast device's /setup/eureka_info payload.
 
@@ -12,8 +24,17 @@ def parse_eureka_info(text: str) -> dict:
     except (ValueError, TypeError):
         raise ValueError("eureka_info response is not valid JSON")
 
-    if not isinstance(data, dict) or not data.get("mac_address"):
-        raise ValueError("eureka_info response has no mac_address")
+    if not isinstance(data, dict):
+        raise ValueError("eureka_info response is not a JSON object")
+
+    mac = _real_mac(data.get("mac_address"))
+    udn = (data.get("ssdp_udn") or "").strip() or None
+
+    # Newer firmware reports an all-zero MAC, which every such device shares;
+    # keying on it collapses them into one. The UDN is unique and stable.
+    device_id = mac or (f"udn:{udn}" if udn else None)
+    if not device_id:
+        raise ValueError("eureka_info response has no mac_address or ssdp_udn")
 
     # An empty BSSID means the firmware declines to report it, so unknown.
     bssid = data.get("bssid") or None
@@ -23,7 +44,9 @@ def parse_eureka_info(text: str) -> dict:
     uptime = data.get("uptime")
 
     return {
-        "mac": data["mac_address"].lower(),
+        "device_id": device_id,
+        "udn": udn,
+        "mac": mac,
         "name": data.get("name"),
         "ip": data.get("ip_address"),
         "ssid": data.get("ssid"),

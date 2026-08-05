@@ -117,15 +117,15 @@ def diagnose(store, days=7):
     if cast:
         lines.append("")
         lines.append(f"Cast devices ({len(cast)}):")
-        for mac, d in sorted(cast.items(), key=lambda kv: (kv[1]["name"] or kv[0])):
+        for device_id, d in sorted(cast.items(), key=lambda kv: (kv[1]["name"] or kv[0])):
             band = d["dominant_band"] or "band unknown"
             lines.append(
-                f"  {d['name'] or mac}: {d['reachable_pct']:.0f}% reachable, "
+                f"  {d['name'] or device_id}: {d['reachable_pct']:.0f}% reachable, "
                 f"{band}, {d['band_switches']} band switches, {d['reboots']} reboots"
             )
 
-        for mac, d in cast.items():
-            label = d["name"] or mac
+        for device_id, d in cast.items():
+            label = d["name"] or device_id
             if d["reachable_pct"] < 95:
                 findings.append(
                     f"⚠ {label} was unreachable in {100 - d['reachable_pct']:.0f}% of "

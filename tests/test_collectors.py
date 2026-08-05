@@ -135,13 +135,13 @@ class TestCastMockCollector:
         from wifi_diag.collectors.cast_mock import CastMockCollector
 
         c = CastMockCollector()
-        macs = {c.collect("1.2.3.4")["mac"] for _ in range(3)}
-        assert len(macs) == 3
+        ids = {c.collect("1.2.3.4")["device_id"] for _ in range(4)}
+        assert len(ids) == 4
 
     def test_ips_lists_mock_devices(self):
         from wifi_diag.collectors.cast_mock import CastMockCollector
 
-        assert len(CastMockCollector().ips()) == 3
+        assert len(CastMockCollector().ips()) == 4
 
 
 class TestLatencyInterfaceBinding:

@@ -136,12 +136,12 @@ class TestHosts:
         assert hosts == ["pi1", "pi2"]
 
 
-def _cast_reading(mac="cc:f4:11:a2:d3:af", band="5GHz", reachable=1,
+def _cast_reading(device_id="cc:f4:11:a2:d3:af", band="5GHz", reachable=1,
                   ts="2026-08-01T10:00:00+00:00", uptime=1000.0):
     return {
         "timestamp": ts,
         "host": "testpi",
-        "mac": mac,
+        "device_id": device_id,
         "ip": "192.168.1.157",
         "name": "Sam's Pod",
         "ssid": "BisNet",
@@ -160,12 +160,12 @@ def _cast_reading(mac="cc:f4:11:a2:d3:af", band="5GHz", reachable=1,
 class TestCastStore:
     def test_upsert_cast_device_inserts_then_updates(self, store):
         store.upsert_cast_device({
-            "mac": "cc:f4:11:a2:d3:af", "name": "Sam's Pod", "model": "Nest Hub",
+            "device_id": "cc:f4:11:a2:d3:af", "name": "Sam's Pod", "model": "Nest Hub",
             "firmware": "1.68", "last_ip": "192.168.1.157",
             "timestamp": "2026-08-01T10:00:00+00:00",
         })
         store.upsert_cast_device({
-            "mac": "cc:f4:11:a2:d3:af", "name": "Sam's Pod", "model": "Nest Hub",
+            "device_id": "cc:f4:11:a2:d3:af", "name": "Sam's Pod", "model": "Nest Hub",
             "firmware": "1.69", "last_ip": "192.168.1.199",
             "timestamp": "2026-08-02T10:00:00+00:00",
         })
@@ -178,9 +178,9 @@ class TestCastStore:
 
     def test_insert_and_query_cast_readings(self, store):
         store.insert_cast_reading(_cast_reading())
-        store.insert_cast_reading(_cast_reading(mac="d8:8c:79:21:66:8a", band="2.4GHz"))
+        store.insert_cast_reading(_cast_reading(device_id="d8:8c:79:21:66:8a", band="2.4GHz"))
         assert len(store.get_cast_readings()) == 2
-        assert len(store.get_cast_readings(mac="cc:f4:11:a2:d3:af")) == 1
+        assert len(store.get_cast_readings(device_id="cc:f4:11:a2:d3:af")) == 1
 
     def test_get_cast_readings_filters_by_time(self, store):
         store.insert_cast_reading(_cast_reading(ts="2026-08-01T10:00:00+00:00"))
@@ -199,10 +199,10 @@ class TestCastStore:
     def test_insert_and_query_cast_events(self, store):
         store.insert_cast_event({
             "timestamp": "2026-08-01T10:00:00+00:00", "host": "testpi",
-            "mac": "cc:f4:11:a2:d3:af", "name": "Sam's Pod",
+            "device_id": "cc:f4:11:a2:d3:af", "name": "Sam's Pod",
             "event_type": "band_switch", "detail": '{"from": "5GHz", "to": "2.4GHz"}',
         })
-        events = store.get_cast_events(mac="cc:f4:11:a2:d3:af")
+        events = store.get_cast_events(device_id="cc:f4:11:a2:d3:af")
         assert len(events) == 1
         assert events[0]["event_type"] == "band_switch"
 
@@ -257,3 +257,95 @@ class TestCastStore:
         # Pre-existing data must survive the upgrade.
         assert len(s.get_wifi_readings()) == 1
         s.close()
+
+
+class TestCastIdentityMigration:
+    """A MAC-keyed database predates firmware that reports no MAC at all."""
+
+    def _legacy_db(self, tmp_path, rows, devices):
+        import sqlite3
+        db = tmp_path / "legacy.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            """CREATE TABLE cast_devices (
+                   mac TEXT PRIMARY KEY, name TEXT, model TEXT, firmware TEXT,
+                   first_seen TEXT, last_seen TEXT, last_ip TEXT
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE cast_readings (
+                   id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL,
+                   host TEXT NOT NULL, mac TEXT NOT NULL, ip TEXT, name TEXT,
+                   ssid TEXT, bssid TEXT, band TEXT, channel INTEGER,
+                   frequency_mhz INTEGER, reachable INTEGER NOT NULL,
+                   ethernet INTEGER, uptime_secs REAL, rtt_avg_ms REAL,
+                   packet_loss_pct REAL
+               )"""
+        )
+        conn.execute(
+            """CREATE TABLE cast_events (
+                   id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL,
+                   host TEXT NOT NULL, mac TEXT NOT NULL, name TEXT,
+                   event_type TEXT NOT NULL, detail TEXT
+               )"""
+        )
+        for mac, name, ip in rows:
+            conn.execute(
+                "INSERT INTO cast_readings (timestamp, host, mac, ip, name, reachable)"
+                " VALUES ('2026-08-01T10:00:00+00:00', 'testpi', ?, ?, ?, 1)",
+                (mac, ip, name),
+            )
+        for mac, name, ip in devices:
+            conn.execute(
+                "INSERT INTO cast_devices (mac, name, last_ip) VALUES (?, ?, ?)",
+                (mac, name, ip),
+            )
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_real_mac_history_survives_the_migration(self, tmp_path):
+        db = self._legacy_db(
+            tmp_path,
+            [("d8:8c:79:21:66:8a", "Living Room speaker", "192.168.1.160")],
+            [("d8:8c:79:21:66:8a", "Living Room speaker", "192.168.1.160")],
+        )
+        store = DiagStore(db)
+        try:
+            rows = store.get_cast_readings(device_id="d8:8c:79:21:66:8a")
+            assert len(rows) == 1
+            assert rows[0]["mac"] == "d8:8c:79:21:66:8a"
+            assert store.get_cast_devices()[0]["device_id"] == "d8:8c:79:21:66:8a"
+        finally:
+            store.close()
+
+    def test_placeholder_mac_history_is_split_by_name(self, tmp_path):
+        """Several devices shared the all-zero MAC, so their rows were merged."""
+        db = self._legacy_db(
+            tmp_path,
+            [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163"),
+             ("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163"),
+             ("00:00:00:00:00:00", "Kitchen Pod", "192.168.1.161")],
+            [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163")],
+        )
+        store = DiagStore(db)
+        try:
+            assert len(store.get_cast_readings(device_id="unidentified:bigboitv")) == 2
+            assert len(store.get_cast_readings(device_id="unidentified:kitchen pod")) == 1
+            # The placeholder was never a real address, so it must not persist as one.
+            assert all(r["mac"] is None for r in store.get_cast_readings())
+        finally:
+            store.close()
+
+    def test_migration_is_idempotent(self, tmp_path):
+        db = self._legacy_db(
+            tmp_path,
+            [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163")],
+            [("00:00:00:00:00:00", "BigBoiTV", "192.168.1.163")],
+        )
+        for _ in range(2):
+            store = DiagStore(db)
+            rows = store.get_cast_readings()
+            store.close()
+        assert len(rows) == 1
+        assert rows[0]["device_id"] == "unidentified:bigboitv"
